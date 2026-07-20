@@ -34,45 +34,44 @@ Tone does not apply to Spelling & Grammar or Summarize.
 - Plain text output (no markdown or special formatting)
 - Automatic retry on network errors
 - Toggle individual actions on/off in settings
-- 4 providers — switch anytime in settings
+- Two models — switch anytime in settings
 
-## Supported Providers
+## Models
 
-Pick a provider in settings. The extension always uses each provider's current flagship model.
+Powered by Claude. Pick the tradeoff you want in settings.
 
-| Provider | Model | Pricing |
-|----------|-------|---------|
-| **Groq** | Llama 3.3 70B | Free |
-| **OpenAI** | GPT-5.5 | Paid |
-| **Anthropic** | Claude Sonnet 4.6 | Paid |
-| **Mistral** | Mistral Medium 3.5 | Paid |
+| Choice | Dropdown Key | Model ID | Last Verified |
+|--------|--------------|----------|---------------|
+| Smarter | `smart` | `claude-sonnet-5` | Jul 2026 |
+| Faster | `fast` | `claude-haiku-4-5` | Jul 2026 |
+
+**Smarter** (default) is the better writer — use it for rewriting, expanding, and summarizing. **Faster** returns in about half the time and costs roughly a third as much, which suits quick spelling and grammar passes.
 
 ## Requirements
 
 - [PopClip](https://pilotmoon.com/popclip/) for macOS
-- API key from one provider (Groq is free)
+- An [Anthropic API key](https://console.anthropic.com/settings/keys)
 
-## Quick Start (Free)
+## Quick Start
 
 1. Install the extension
-2. Get a free API key from [console.groq.com](https://console.groq.com)
-3. Open PopClip settings, paste your Groq key
+2. Create an API key at [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys)
+3. Open PopClip settings, paste your key
 4. Select text anywhere and click an action
 
 ## Configuration
 
 Open PopClip menu bar icon, then click the gear on AI SuperClip.
 
-### API Keys
+### API Key
 
-| Provider | Get Your Key |
-|----------|--------------|
-| Groq (Free) | [console.groq.com/keys](https://console.groq.com/keys) |
-| OpenAI | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) |
-| Anthropic | [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys) |
-| Mistral | [console.mistral.ai/api-keys](https://console.mistral.ai/api-keys) |
+Paste your Anthropic key from [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys). It is stored in the macOS Keychain, and requests go directly from your Mac to Anthropic — nothing routes through a server of ours.
 
-Only enter a key for your selected provider.
+> **Upgrading from 1.x?** Versions through 1.2.0 stored API keys in PopClip's preferences file in cleartext rather than the Keychain. Rotate any key you entered in an earlier version, then re-enter the new one.
+
+Selections are capped at 50,000 characters so an accidental Select All can't run up a large bill.
+
+Usage is billed to your own Anthropic account. Typical actions run a few hundred tokens, so ordinary use costs cents per month.
 
 ## Usage
 

@@ -16,16 +16,22 @@ const REQUEST_TIMEOUT = 60000;
 const MAX_RETRIES = 2;
 const RETRY_DELAY_MS = 500;
 
-// Provider → current model name. Update here when a provider releases a new flagship.
-// Last verified: May 2026
-const PROVIDER_MODELS = {
-  groq: "llama-3.3-70b-versatile",
-  openai: "gpt-5.5",
-  claude: "claude-sonnet-4-6",
-  mistral: "mistral-medium-latest"
+// Hard ceiling on total time spent across all attempts, including backoff.
+const TOTAL_DEADLINE_MS = 90000;
+
+// Upper bound on selection size. Roughly 12k tokens — comfortably inside the
+// context window, but low enough that an accidental Select All can't run up a
+// surprise bill on the user's own API key.
+const MAX_INPUT_CHARS = 50000;
+
+// Dropdown key → Claude model ID. Update here when Anthropic ships a new model.
+// Last verified: Jul 2026
+const MODELS = {
+  fast: "claude-haiku-4-5",
+  smart: "claude-sonnet-5"
 };
 
-const MAX_TOKENS = 2048;
+const MAX_TOKENS = 4096;
 
 // Tone instructions (injected into writing prompts when not "default")
 const TONES = {
@@ -121,63 +127,52 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-// Check if error is a rate limit (429) error
-function isRateLimitError(error) {
-  return error.response && error.response.status === 429;
+// HTTP status of a failed request, or null if the request never got a response.
+function statusOf(error) {
+  return (error && error.response && error.response.status) || null;
 }
 
-// Check if error is retryable (network errors, 5xx, 429)
+// True only for transport-level failures (DNS, offline, timeout).
+// Deliberately narrow: an error we threw ourselves — a bad response shape, a
+// too-long selection — has neither marker, so it is NOT mistaken for a network
+// blip and retried at full price.
+function isNetworkError(error) {
+  return Boolean(error && !error.response && (error.isAxiosError || error.code));
+}
+
+// Retry only what a retry can actually fix.
 function isRetryableError(error) {
-  if (!error.response) {
-    // Network error, timeout, etc.
-    return true;
-  }
-  const status = error.response.status;
+  const status = statusOf(error);
+  if (status === null) return isNetworkError(error);
   return status === 429 || (status >= 500 && status < 600);
 }
 
 // Get user-friendly error message
 function getErrorMessage(error) {
-  if (isRateLimitError(error)) {
-    return "Rate limit exceeded. Please wait a moment and try again.";
-  }
-  if (!error.response) {
-    return "Network error. Please check your connection.";
-  }
-  if (error.response.status === 401) {
-    return "Invalid API key. Please check your settings.";
-  }
-  if (error.response.status === 403) {
-    return "Access denied. Please check your API key permissions.";
-  }
-  if (error.response.status >= 500) {
-    return "Server error. Please try again later.";
-  }
-  return error.message || "An unexpected error occurred.";
+  const status = statusOf(error);
+
+  if (status === 429) return "Rate limit exceeded. Please wait a moment and try again.";
+  if (status === 401) return "Invalid API key. Please check your settings.";
+  if (status === 403) return "Access denied. Please check your API key permissions.";
+  if (status === 404) return "Model unavailable. Your API key may not have access to it.";
+  if (status !== null && status >= 500) return "Server error. Please try again later.";
+
+  if (isNetworkError(error)) return "Network error. Please check your connection.";
+
+  // Our own errors carry a message written for the user; surface it verbatim.
+  return (error && error.message) || "An unexpected error occurred.";
 }
 
-// Route to appropriate API based on selected provider
-async function callLLMapi(prompt, options) {
-  const provider = options.model || "groq";
-  switch (provider) {
-    case "groq":    return await callGroqAPI(prompt, options);
-    case "openai":  return await callOpenAPI(prompt, options);
-    case "claude":  return await callClaudeAPI(prompt, options);
-    case "mistral": return await callMistralAPI(prompt, options);
-  }
-  throw new Error("Unknown provider: " + provider);
-}
-
-// Wrapper with retry logic
+// Wrapper with retry logic, bounded by an overall wall-clock deadline so a
+// string of slow attempts can never leave the user watching a spinner for
+// minutes (MAX_RETRIES x REQUEST_TIMEOUT would otherwise allow ~3 minutes).
 async function callWithRetry(apiFunction, prompt, options) {
-  let lastError;
+  const deadline = Date.now() + TOTAL_DEADLINE_MS;
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
       return await apiFunction(prompt, options);
     } catch (error) {
-      lastError = error;
-
       // Don't retry settings errors
       if (error.message && error.message.toLowerCase().startsWith("settings error")) {
         throw error;
@@ -188,50 +183,30 @@ async function callWithRetry(apiFunction, prompt, options) {
         throw error;
       }
 
-      // Wait before retrying (exponential backoff)
-      await sleep(RETRY_DELAY_MS * Math.pow(2, attempt));
-    }
-  }
-
-  throw lastError;
-}
-
-// --- GROQ API (Free, OpenAI-compatible)
-async function callGroqAPI(prompt, options) {
-  const key = (options.groqapikey || "").trim();
-  if (!key) {
-    throw new Error("Settings error: missing Groq API key. Get a free key at console.groq.com");
-  }
-
-  const { data } = await axios.post(
-    "https://api.groq.com/openai/v1/chat/completions",
-    {
-      model: PROVIDER_MODELS.groq,
-      max_tokens: MAX_TOKENS,
-      messages: [{ role: "user", content: prompt }]
-    },
-    {
-      timeout: REQUEST_TIMEOUT,
-      headers: {
-        Authorization: `Bearer ${key}`,
-        "Content-Type": "application/json"
+      // Out of time, or not enough left for another attempt to be worthwhile
+      const backoff = RETRY_DELAY_MS * Math.pow(2, attempt);
+      if (Date.now() + backoff >= deadline) {
+        throw error;
       }
+
+      await sleep(backoff);
     }
-  );
-  return data.choices[0].message.content.trim();
+  }
 }
 
 // --- CLAUDE API
 async function callClaudeAPI(prompt, options) {
   const key = (options.claudeapikey || "").trim();
   if (!key) {
-    throw new Error("Settings error: missing Claude API key");
+    throw new Error("Settings error: missing Claude API key. Get one at console.anthropic.com/settings/keys");
   }
+
+  const model = MODELS[options.model] || MODELS.smart;
 
   const { data } = await axios.post(
     "https://api.anthropic.com/v1/messages",
     {
-      model: PROVIDER_MODELS.claude,
+      model: model,
       max_tokens: MAX_TOKENS,
       messages: [{ role: "user", content: prompt }]
     },
@@ -245,62 +220,44 @@ async function callClaudeAPI(prompt, options) {
       }
     }
   );
-  return data.content[0].text.trim();
-}
 
-// --- OPENAI API
-async function callOpenAPI(prompt, options) {
-  const key = (options.apikey || "").trim();
-  if (!key) {
-    throw new Error("Settings error: missing OpenAI API key");
+  // Validate the shape before indexing into it. A refusal or an unexpected
+  // payload yields an empty content array, and blind data.content[0].text
+  // would throw a TypeError that reads to the user as a network failure.
+  const blocks = data && Array.isArray(data.content) ? data.content : null;
+  if (!blocks) {
+    throw new Error("Unexpected response from Claude. Please try again.");
   }
 
-  const { data } = await axios.post(
-    "https://api.openai.com/v1/chat/completions",
-    {
-      model: PROVIDER_MODELS.openai,
-      max_tokens: MAX_TOKENS,
-      messages: [{ role: "user", content: prompt }]
-    },
-    {
-      timeout: REQUEST_TIMEOUT,
-      headers: {
-        Authorization: `Bearer ${key}`
-      }
-    }
-  );
-  return data.choices[0].message.content.trim();
-}
+  const text = blocks
+    .filter(block => block && block.type === "text" && typeof block.text === "string")
+    .map(block => block.text)
+    .join("")
+    .trim();
 
-// --- MISTRAL API
-async function callMistralAPI(prompt, options) {
-  const key = (options.mistralapikey || "").trim();
-  if (!key) {
-    throw new Error("Settings error: missing Mistral API key");
+  if (!text) {
+    throw new Error("Claude returned an empty response. Try rephrasing or selecting different text.");
   }
 
-  const { data } = await axios.post(
-    "https://api.mistral.ai/v1/chat/completions",
-    {
-      model: PROVIDER_MODELS.mistral,
-      max_tokens: MAX_TOKENS,
-      messages: [{ role: "user", content: prompt }]
-    },
-    {
-      timeout: REQUEST_TIMEOUT,
-      headers: {
-        Authorization: `Bearer ${key}`,
-        "Content-Type": "application/json",
-        Accept: "application/json"
-      }
-    }
-  );
-  return data.choices[0].message.content.trim();
+  return { text: text, truncated: data.stop_reason === "max_tokens" };
 }
 
 // Generic action runner with error handling and retry
 async function runAction(promptKey, input, options) {
   try {
+    const text = input.text.trim();
+
+    if (!text) {
+      throw new Error("Nothing to process. Select some text first.");
+    }
+
+    if (text.length > MAX_INPUT_CHARS) {
+      throw new Error(
+        `Selection is too long (${text.length.toLocaleString()} characters, limit ` +
+        `${MAX_INPUT_CHARS.toLocaleString()}). Select a smaller passage.`
+      );
+    }
+
     let prompt = PROMPTS[promptKey];
 
     // Inject tone instruction for writing actions when not default
@@ -312,13 +269,20 @@ async function runAction(promptKey, input, options) {
       }
     }
 
-    prompt += "\n\n" + input.text.trim();
+    prompt += "\n\n" + text;
 
     // Use retry wrapper
-    const apiFunction = async (p, o) => callLLMapi(p, o);
-    const data = await callWithRetry(apiFunction, prompt, options);
+    const result = await callWithRetry(callClaudeAPI, prompt, options);
 
-    prepareResponse(data);
+    // A truncated result must never overwrite the selection — pasting would
+    // replace good text with a sentence that stops mid-word. Put the partial
+    // on the clipboard so the spend isn't wasted, then report why.
+    if (result.truncated) {
+      popclip.copyText(result.text);
+      throw new Error("Response was cut off because it got too long. The partial result was copied to your clipboard. Try a smaller selection.");
+    }
+
+    prepareResponse(result.text);
   } catch (error) {
     // Re-throw settings errors to trigger PopClip settings UI
     if (error.message && error.message.toLowerCase().startsWith("settings error")) {

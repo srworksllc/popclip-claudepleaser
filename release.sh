@@ -112,7 +112,7 @@ echo "  package.json → $NEW_VERSION"
 # ── Step 2: Sync documentation ───────────────────────────────────
 
 echo ""
-echo "Step 2: Syncing docs from settings.js (PROVIDER_MODELS)..."
+echo "Step 2: Syncing docs from settings.js (MODELS)..."
 
 python3 << 'PYEOF'
 import re, os
@@ -124,74 +124,48 @@ CLAUDE_MD = os.path.join(SCRIPT_DIR, "CLAUDE.md")
 README = os.path.join(SCRIPT_DIR, "README.md")
 BUNDLE_README = os.path.join(EXT_DIR, "README.md")
 
-# ── Parse PROVIDER_MODELS from settings.js ──
-# Truth source: const PROVIDER_MODELS = { groq: "...", openai: "...", ... };
+# ── Parse MODELS from settings.js ──
+# Truth source: const MODELS = { fast: "...", smart: "..." };
 
 with open(SETTINGS) as f:
     src = f.read()
 
-block_match = re.search(r'const\s+PROVIDER_MODELS\s*=\s*\{([^}]+)\};', src, re.DOTALL)
+block_match = re.search(r'const\s+MODELS\s*=\s*\{([^}]+)\};', src, re.DOTALL)
 if not block_match:
-    raise SystemExit("Error: could not find PROVIDER_MODELS block in settings.js")
+    raise SystemExit("Error: could not find MODELS block in settings.js")
 
-provider_models = {}
+models = {}
 for m in re.finditer(r'(\w+)\s*:\s*"([^"]+)"', block_match.group(1)):
-    provider_models[m.group(1)] = m.group(2)
+    models[m.group(1)] = m.group(2)
 
-provider_count = len(provider_models)
+if not models:
+    raise SystemExit("Error: MODELS block parsed but contained no entries")
 
-# ── Refresh "Current Model ID" cells in CLAUDE.md ──
-# We do not invent labels — we only refresh the model-ID column.
+# ── Refresh the "Model ID" column in the model tables ──
+# Rows look like: | Smarter | `smart` | `claude-sonnet-5` | Jul 2026 |
+# We only rewrite the model-ID cell; human labels stay hand-written.
 
-with open(CLAUDE_MD) as f:
-    claude = f.read()
-
-claude = re.sub(
-    r'supports \d+ providers',
-    f'supports {provider_count} providers',
-    claude
-)
-
-# Each row has the format:
-# | Groq | `groq` | `<model-id>` | <date> |
-# Match the row's third cell (between two backtick groups) and rewrite it.
-def rewrite_model_cell(match):
-    label, key = match.group(1), match.group(2)
-    new_id = provider_models.get(key.strip())
+def rewrite_row(m):
+    label, key, _old_id, date = m.group(1), m.group(2), m.group(3), m.group(4)
+    new_id = models.get(key.strip())
     if not new_id:
-        return match.group(0)
-    return f"| {label} | `{key}` | `{new_id}` | {match.group(4)} |"
+        return m.group(0)
+    return f"| {label} | `{key}` | `{new_id}` | {date} |"
 
-claude = re.sub(
-    r'\|\s*([^|]+?)\s*\|\s*`(\w+)`\s*\|\s*`[^`]+`\s*\|\s*([^|]+?)\s*\|',
-    lambda m: rewrite_model_cell(re.match(
-        r'\|\s*([^|]+?)\s*\|\s*`(\w+)`\s*\|\s*`([^`]+)`\s*\|\s*([^|]+?)\s*\|',
-        m.group(0)
-    )),
-    claude
-)
+ROW_RE = r'\|\s*([^|]+?)\s*\|\s*`(\w+)`\s*\|\s*`([^`]+)`\s*\|\s*([^|]+?)\s*\|'
 
-with open(CLAUDE_MD, "w") as f:
-    f.write(claude)
-
-# ── Refresh provider count in READMEs ──
-
-for readme_path in [README, BUNDLE_README]:
-    with open(readme_path) as f:
+for path in [CLAUDE_MD, README, BUNDLE_README]:
+    with open(path) as f:
         content = f.read()
 
-    content = re.sub(
-        r'\d+ providers — switch anytime',
-        f'{provider_count} providers — switch anytime',
-        content
-    )
+    content = re.sub(ROW_RE, rewrite_row, content)
 
-    with open(readme_path, "w") as f:
+    with open(path, "w") as f:
         f.write(content)
 
-print(f"  Providers: {provider_count}")
-for k, v in provider_models.items():
-    print(f"    {k:8s} → {v}")
+print(f"  Models: {len(models)}")
+for k, v in models.items():
+    print(f"    {k:6s} → {v}")
 print(f"  CLAUDE.md    ✓")
 print(f"  README.md    ✓ (both copies)")
 PYEOF

@@ -11,7 +11,7 @@
 
 ## Overview
 
-AI SuperClip is a PopClip extension for macOS that enhances selected text using AI language models. It supports 4 providers, with Groq's Llama 3.3 70B as the default. Each provider exposes one curated flagship model — the dropdown selects the provider, and the actual model ID is resolved from `PROVIDER_MODELS` in `settings.js`.
+AI SuperClip is a PopClip extension for macOS that enhances selected text using Claude. It is Anthropic-only: one API key, one endpoint. The dropdown selects a speed/quality tradeoff (`smart` or `fast`), and the actual model ID is resolved from `MODELS` in `settings.js`.
 
 **Author:** Steve Reinhardt | SR Works LLC | https://srworks.co
 **License:** MIT
@@ -23,7 +23,7 @@ AI SuperClip is a PopClip extension for macOS that enhances selected text using 
 popclip-ai-superclip/
 ├── AI_SuperClip.popclipext/     # PopClip extension bundle
 │   ├── Config.json              # Extension metadata and options
-│   ├── settings.js              # Main extension logic (440 lines)
+│   ├── settings.js              # Main extension logic
 │   ├── package.json             # NPM package metadata
 │   ├── LICENSE                  # MIT License
 │   └── README.md                # User documentation (bundle copy)
@@ -45,16 +45,16 @@ popclip-ai-superclip/
 
 ## Supported Models
 
-The dropdown stores provider keys (`groq`, `openai`, `claude`, `mistral`). The actual model ID sent to each provider is resolved at call time from `PROVIDER_MODELS` in `settings.js`. This means model upgrades require editing one constant — no Config.json changes, no doc churn from snapshot model IDs.
+The dropdown stores intent keys (`smart`, `fast`), not model IDs. The actual ID is resolved at call time from `MODELS` in `settings.js`. Model upgrades therefore require editing one constant — no Config.json changes, and no doc churn from snapshot model IDs leaking into the UI.
 
-| Provider | Dropdown Key | Current Model ID | Last Verified |
-|----------|--------------|------------------|---------------|
-| Groq | `groq` | `llama-3.3-70b-versatile` | Jun 2026 |
-| OpenAI | `openai` | `gpt-5.5` | Jun 2026 |
-| Anthropic Claude | `claude` | `claude-sonnet-4-6` | Jun 2026 |
-| Mistral | `mistral` | `mistral-medium-latest` | Jun 2026 |
+| Choice | Dropdown Key | Model ID | Last Verified |
+|--------|--------------|----------|---------------|
+| Smarter | `smart` | `claude-sonnet-5` | Jul 2026 |
+| Faster | `fast` | `claude-haiku-4-5` | Jul 2026 |
 
-`MAX_TOKENS` is a single constant (currently `2048`). It applies to all providers. The value is intentionally low to keep requests inside Groq free-tier rate limits (12K TPM) — Groq counts the reserved `max_tokens` against the budget whether the response uses them or not.
+`smart` is the default. Unknown or missing keys fall back to `MODELS.smart`, so a stale stored preference degrades to a working model rather than an API error.
+
+`MAX_TOKENS` is `4096`. It was previously `2048` to stay inside Groq's free-tier 12K TPM budget (Groq counted reserved `max_tokens` whether used or not). With Groq gone, that constraint no longer applies — the higher ceiling gives "Make Longer" room to actually double a paragraph.
 
 
 ## Code Architecture
@@ -62,44 +62,54 @@ The dropdown stores provider keys (`groq`, `openai`, `claude`, `mistral`). The a
 ### settings.js Structure
 
 - Header and imports (`axios`)
-- Configuration constants: `REQUEST_TIMEOUT` (60s), `MAX_RETRIES` (2), `RETRY_DELAY_MS` (500), `PROVIDER_MODELS` (provider→model map), `MAX_TOKENS` (2048)
+- Configuration constants: `REQUEST_TIMEOUT` (60s), `MAX_RETRIES` (2), `RETRY_DELAY_MS` (500), `MODELS` (intent key→model ID map), `MAX_TOKENS` (4096)
 - `TONES` map and `TONE_ACTIONS` list — tone instructions injected into writing prompts when not "default"
 - `PROMPTS` object — 5 prompt templates (improveWriting, correctSpellingGrammar, summarize, makeLonger, makeShorter)
 - Utility functions: `prepareResponse()` (paste vs copy on Shift), `sleep()`, `isRateLimitError()`, `isRetryableError()`, `getErrorMessage()`
-- `callLLMapi()` — switch on provider key, routes to provider-specific function
 - `callWithRetry()` — exponential backoff wrapper
-- Provider functions: `callGroqAPI`, `callOpenAPI`, `callClaudeAPI`, `callMistralAPI` — each looks up its model via `PROVIDER_MODELS[<key>]`
+- `callClaudeAPI()` — the single API call; resolves its model via `MODELS[options.model]`
 - Action handlers: `runAction()` generic dispatcher + the 5 thin action wrappers
 - `exports.actions` array — PopClip action declarations
 
-### API Endpoints
+### API Endpoint
 
-| Provider | Endpoint |
-|----------|----------|
-| Groq | `https://api.groq.com/openai/v1/chat/completions` |
-| OpenAI | `https://api.openai.com/v1/chat/completions` |
-| Claude | `https://api.anthropic.com/v1/messages` |
-| Mistral | `https://api.mistral.ai/v1/chat/completions` |
+`POST https://api.anthropic.com/v1/messages`, pinned to `anthropic-version: 2023-06-01`. Auth is the `x-api-key` header (not `Authorization: Bearer` — that form is for OAuth tokens and will 401 with a key).
 
 ### Error Handling
 
 **Retry Logic:**
-- Retries on: Network errors, 429 (rate limit), 5xx (server errors)
-- Does NOT retry on: 401 (auth), 403 (forbidden), settings errors
+- Retries on: transport failures (`isNetworkError`), 429, 5xx
+- Does NOT retry on: 401, 403, 404, settings errors, or any error the extension raised itself
 - Exponential backoff: 500ms, 1s delay
+- Bounded by `TOTAL_DEADLINE_MS` (90s) across all attempts — without it, `MAX_RETRIES` × `REQUEST_TIMEOUT` allows a ~3 minute hang
+
+`isNetworkError` requires `isAxiosError` or a `code` **and** no `response`. This matters: a plain `Error` thrown inside `callClaudeAPI` (bad response shape, oversize input) also lacks `.response`, and a looser check would classify it as a network blip — retrying a deterministic failure three times at full price and reporting "check your connection" for a problem that has nothing to do with the network.
+
+**Response validation:**
+- `content` must be an array; text blocks are filtered by `type === "text"` and joined (not `content[0].text`, which throws on an empty array)
+- `stop_reason === "max_tokens"` → the partial is copied to the clipboard and an error is raised. It is never pasted: pasting replaces the user's selection, so a truncated response would destroy good text.
+
+**Input limits:**
+- Empty selection and selections over `MAX_INPUT_CHARS` (50,000) are rejected before any network call, so neither costs the user money.
 
 **Settings Errors:**
 - Messages starting with "Settings error:" trigger PopClip settings UI
-- Example: `throw new Error("Settings error: missing Groq API key")`
+- Example: `throw new Error("Settings error: missing Claude API key")`
 
 **User Messages:**
 | Condition | Message |
 |-----------|---------|
 | 429 | "Rate limit exceeded. Please wait a moment and try again." |
-| Network | "Network error. Please check your connection." |
 | 401 | "Invalid API key. Please check your settings." |
 | 403 | "Access denied. Please check your API key permissions." |
+| 404 | "Model unavailable. Your API key may not have access to it." |
 | 5xx | "Server error. Please try again later." |
+| Network | "Network error. Please check your connection." |
+| Empty/invalid response | "Claude returned an empty response…" / "Unexpected response from Claude…" |
+| Truncated (`max_tokens`) | "Response was cut off… copied to your clipboard…" |
+| Oversize selection | "Selection is too long (N characters, limit 50,000)…" |
+
+404 is checked explicitly because a stale or bad ID in `MODELS` is the most likely cause, and the generic 4xx fallthrough would have surfaced axios's raw message.
 
 ## Prompt Design
 
@@ -119,11 +129,10 @@ All prompts follow consistent rules:
 
 | Identifier | Type | Purpose |
 |------------|------|---------|
-| `groqapikey` | secret | Groq API key (Keychain) |
-| `apikey` | secret | OpenAI API key |
-| `claudeapikey` | secret | Anthropic API key |
-| `mistralapikey` | secret | Mistral API key |
-| `model` | multiple | Provider key (`groq`, `openai`, `claude`, `mistral`) |
+| `claudeapikey` | secret | Anthropic API key (Keychain) |
+| `model` | multiple | Model choice (`smart`, `fast`) |
+
+> **`claudeapikey` must stay `type: "secret"`.** PopClip's `secret` conceals the field and persists the value to the macOS Keychain; `string` does neither — it stores the key in cleartext in `~/Library/Preferences/com.pilotmoon.popclip.plist` and shows it unmasked in settings. This field was `string` through v1.2.0, so any key entered before v2.0.0 was written to that plist and should be rotated. Note that `secret` fields may not declare a `defaultValue`.
 | `tone` | multiple | Tone selection (default, professional, casual, friendly, direct) |
 | `enable-improve-writing` | boolean | Toggle Improve Writing action |
 | `enable-spelling-grammar` | boolean | Toggle Spelling & Grammar action |
@@ -148,18 +157,17 @@ Requires text selection AND the toggle option enabled.
 3. Add to `exports.actions` array with title, icon, code, requirements
 4. Add toggle option in Config.json with `identifier`, `label`, `type: boolean`, `defaultValue: true`
 
-### Update a Provider's Model
+### Update a Model
 
-When a provider releases a new flagship, edit one line in `PROVIDER_MODELS` in `settings.js`. No Config.json edits needed. After updating, manually refresh the "Current Model ID" row in the Supported Models table above (the release script does not auto-sync this, by design — model labels are too short and reviewer-facing to derive from API IDs reliably).
+When Anthropic ships a newer model, edit one line in `MODELS` in `settings.js`. No Config.json edits needed — the dropdown stores intent keys, not IDs. `./release.sh` then syncs the Model ID column in CLAUDE.md and both READMEs. The human-facing labels ("Smarter", "Faster") are hand-written and never auto-derived.
 
-### Add a New Provider
+### Add a Third Model Choice
 
-1. Add the provider key to `PROVIDER_MODELS` in `settings.js`
-2. Implement `callXxxAPI()`
-3. Add the provider to the `switch` in `callLLMapi()`
-4. Add an API key option to `Config.json`
-5. Add the provider key + label to the `model` dropdown's `values` and `valueLabels` arrays in `Config.json`
-6. Add a row to the Supported Models table above
+1. Add the key to `MODELS` in `settings.js`
+2. Add the key + label to the `model` dropdown's `values` and `valueLabels` arrays in `Config.json`
+3. Add a row to the Supported Models table above (release.sh will keep its ID current)
+
+No new API function is needed — every Claude model uses the same endpoint and request shape.
 
 ### Update a Prompt
 
@@ -179,7 +187,7 @@ Edit the relevant key in `PROMPTS` object. Follow existing structure:
 | Step | Action |
 |------|--------|
 | 1 | Version bump (Config.json, package.json) |
-| 2 | Sync docs — refreshes the provider count and the "Current Model ID" column in CLAUDE.md and READMEs from `PROVIDER_MODELS` in settings.js |
+| 2 | Sync docs — refreshes the "Model ID" column in CLAUDE.md and both READMEs from `MODELS` in settings.js |
 | 3 | Build ZIP (`.popclipextz`) |
 | 4 | Git commit + tag (includes Config.json, package.json, CLAUDE.md, README.md x2) |
 | 5 | Push to GitHub |
@@ -187,9 +195,9 @@ Edit the relevant key in `PROMPTS` object. Follow existing structure:
 | 7 | Cleanup (remove local ZIP) |
 
 **Doc sync (Step 2):**
-- Reads `PROVIDER_MODELS` from `settings.js` (single source of truth for model IDs)
-- Updates the provider count in CLAUDE.md overview and READMEs
-- Hand-written human labels (e.g. "Llama 3.3 70B", "GPT-5.5") are NOT auto-derived from API IDs — update them manually when the model line in `PROVIDER_MODELS` changes
+- Reads `MODELS` from `settings.js` (single source of truth for model IDs)
+- Rewrites the Model ID cell of any table row whose key matches a `MODELS` key, in CLAUDE.md and both READMEs
+- Hand-written labels ("Smarter", "Faster") are NOT auto-derived — update them manually if the tradeoff a model represents changes
 
 ## Debugging
 
