@@ -16,16 +16,47 @@ const REQUEST_TIMEOUT = 60000;
 const MAX_RETRIES = 2;
 const RETRY_DELAY_MS = 500;
 
-// Provider → current model name. Update here when a provider releases a new flagship.
-// Last verified: May 2026
-const PROVIDER_MODELS = {
-  groq: "llama-3.3-70b-versatile",
-  openai: "gpt-5.5",
-  claude: "claude-sonnet-4-6",
-  mistral: "mistral-medium-latest"
+// Hard ceiling on total time spent across all attempts, including backoff.
+const TOTAL_DEADLINE_MS = 90000;
+
+// Upper bound on selection size. Low enough that an accidental Select All
+// can't run up a surprise bill on the user's own API key.
+const MAX_INPUT_CHARS = 50000;
+
+// Output has to fit inside MAX_TOKENS, which is roughly this many characters
+// of English. Each action expands or contracts its input by a different
+// factor, so a single global cap is wrong in both directions: it lets Make
+// Longer truncate on inputs it can never finish, while needlessly restricting
+// Summarize. Derive the real limit per action instead.
+const OUTPUT_CHAR_BUDGET = 16000;
+
+const OUTPUT_RATIO = {
+  improveWriting: 1,
+  correctSpellingGrammar: 1,
+  makeLonger: 2,
+  makeShorter: 0.5,
+  summarize: 0.3
 };
 
-const MAX_TOKENS = 2048;
+function maxInputCharsFor(promptKey) {
+  const ratio = OUTPUT_RATIO[promptKey] || 1;
+  return Math.min(MAX_INPUT_CHARS, Math.floor(OUTPUT_CHAR_BUDGET / ratio));
+}
+
+// The selection is wrapped in this tag so the model can tell the user's
+// content apart from our instructions. Without a delimiter, a selection that
+// happens to contain list markers or imperative sentences reads as more
+// instructions.
+const INPUT_TAG = "input_text";
+
+// Dropdown key → Claude model ID. Update here when Anthropic ships a new model.
+// Last verified: Jul 2026
+const MODELS = {
+  fast: "claude-haiku-4-5",
+  smart: "claude-sonnet-5"
+};
+
+const MAX_TOKENS = 4096;
 
 // Tone instructions (injected into writing prompts when not "default")
 const TONES = {
@@ -41,70 +72,105 @@ const TONE_ACTIONS = ["improveWriting", "makeLonger", "makeShorter"];
 
 // Prompt templates for each action
 const PROMPTS = {
-  improveWriting: `Rewrite the text below for clarity, flow, and impact. Keep the original meaning.
+  improveWriting: `You rewrite text for clarity, flow, and impact while preserving the author's meaning and voice.
 
 RULES:
-1. Output ONLY the rewritten text. No preamble, no explanation, no commentary. Do not wrap output in quotes.
-2. NO markdown. No bold, italics, headers, or bullet points.
-3. NO em dashes, en dashes, or semicolons. Use commas or periods instead. Hyphens only for compound words.
-4. Match the original length. Don't shorten or lengthen significantly.
+1. Output ONLY the rewritten text. No preamble, no commentary. Do not wrap the output in quotes.
+2. Plain text only. No markdown, headers, or bullet points.
+3. No em dashes, en dashes, or semicolons. Use commas or periods instead. Hyphens only in compound words.
+4. Keep roughly the original length. Cutting filler is fine, but do not add or remove substance.
 5. Preserve the author's voice. Make it clearer, not different.
 6. Preserve paragraph breaks and line structure.
-7. Sound human. Use contractions and short sentences. Avoid filler words like "essentially", "basically", "in order to". It should read like a person wrote it, not AI.
+7. Write like a person: contractions, short sentences, no filler such as "essentially", "basically", or "in order to".
+8. If the text is already clear and well written, return it unchanged.
+9. If the text is code, markup, a URL, a file path, or structured data rather than prose, return it unchanged.
 
-TEXT:`,
+EXAMPLE
+Input:
+<input_text>
+It is essentially the case that our team was not able to complete the deliverable in a timely fashion — this was due to the fact that there were a number of blockers; we are working to resolve them.
+</input_text>
+Output:
+Our team missed the deadline because several blockers got in the way. We're working through them now.`,
 
-  correctSpellingGrammar: `Fix spelling, grammar, and capitalization errors in the text below.
-
-RULES:
-1. Output ONLY the corrected text. No preamble, no explanation. Do not wrap output in quotes.
-2. NO markdown. No bold, italics, headers, or bullet points.
-3. NO em dashes, en dashes, or semicolons. Use commas or periods instead. Hyphens only for compound words.
-4. ONLY fix errors. Do not rephrase, reword, or rewrite anything.
-5. If the text has no errors, return it unchanged.
-6. Fix capitalization: first word of every sentence, proper nouns, and "I". Input may be all lowercase.
-7. Preserve paragraph breaks, line structure, and formatting.
-8. Do not modify code, URLs, file paths, variable names, or technical terms.
-
-TEXT:`,
-
-  summarize: `Summarize the text below. Extract the main ideas, key points, and action items.
+  correctSpellingGrammar: `You fix spelling, grammar, punctuation, and capitalization errors in text. You do not rewrite.
 
 RULES:
-1. Output ONLY the summary. No preamble, no explanation. Do not wrap output in quotes.
-2. NO markdown formatting (bold, italics, headers). Bullet points are allowed for multiple topics.
-3. NO em dashes, en dashes, or semicolons. Use commas or periods instead. Hyphens only for compound words.
+1. Output ONLY the corrected text. No preamble, no commentary. Do not wrap the output in quotes.
+2. Fix errors only. Do not rephrase, reword, restructure, or adjust style.
+3. Leave correct punctuation alone, including em dashes, en dashes, and semicolons. These are not errors, and changing them is rewriting.
+4. Fix capitalization: the first word of each sentence, proper nouns, and "I". Input may be entirely lowercase.
+5. Preserve paragraph breaks, line structure, and formatting.
+6. Do not modify code, URLs, file paths, variable names, or technical terms.
+7. If the text contains no errors, return it unchanged.
+
+EXAMPLE
+Input:
+<input_text>
+i cant beleive its already friday — the teams sprint ends tommorow; we should of started earlier.
+</input_text>
+Output:
+I can't believe it's already Friday — the team's sprint ends tomorrow; we should have started earlier.`,
+
+  summarize: `You summarize text, extracting the main ideas, key points, and action items.
+
+RULES:
+1. Output ONLY the summary. No preamble, no commentary. Do not wrap the output in quotes.
+2. Plain text. No bold, italics, or headers. Plain "- " bullets are allowed when the text covers several distinct topics.
+3. No em dashes, en dashes, or semicolons. Use commas or periods instead. Hyphens only in compound words.
 4. Aim for 20 to 30 percent of the original length.
-5. Write in plain, objective language. No opinions or interpretations.
-6. For very short input (under 2 sentences), return the core point in one sentence.
+5. Plain, objective language. No opinions, interpretation, or editorializing.
+6. If the input is shorter than about two sentences, return its core point in one sentence.
 
-TEXT:`,
+EXAMPLE
+Input:
+<input_text>
+Team, the Q3 launch is moving from September 12 to October 3. QA found two blocking bugs in checkout and we would rather ship late than ship broken. Priya is writing the customer comms and needs copy review by Friday. Marketing should hold the press release until the new date is confirmed.
+</input_text>
+Output:
+The Q3 launch moves from September 12 to October 3 because QA found two blocking checkout bugs.
+- Priya needs copy review on customer comms by Friday.
+- Marketing holds the press release until the new date is confirmed.`,
 
-  makeLonger: `Expand the text below with more detail, examples, or elaboration. Keep the same tone and message.
-
-RULES:
-1. Output ONLY the expanded text. No preamble, no explanation. Do not wrap output in quotes.
-2. NO markdown. No bold, italics, headers, or bullet points.
-3. NO em dashes, en dashes, or semicolons. Use commas or periods instead. Hyphens only for compound words.
-4. Add substance, not fluff. Include relevant details, examples, or context. Don't repeat existing points in different words. Do not add a concluding paragraph that restates what was already said.
-5. Roughly double the length, but prioritize quality over word count.
-6. Preserve paragraph breaks and line structure. Add new paragraphs where natural.
-7. Sound human. Use contractions and short sentences. No AI-sounding language.
-
-TEXT:`,
-
-  makeShorter: `Condense the text below to its essential points. Preserve the core message and tone.
+  makeLonger: `You expand text with real detail while keeping the original tone and message.
 
 RULES:
-1. Output ONLY the condensed text. No preamble, no explanation. Do not wrap output in quotes.
-2. NO markdown. No bold, italics, headers, or bullet points.
-3. NO em dashes, en dashes, or semicolons. Use commas or periods instead. Hyphens only for compound words.
-4. Cut filler words, redundancies, and unnecessary qualifiers. Do not add a summary sentence that wasn't in the original.
-5. Aim for roughly half the original length, but keep all essential information.
+1. Output ONLY the expanded text. No preamble, no commentary. Do not wrap the output in quotes.
+2. Plain text only. No markdown, headers, or bullet points.
+3. No em dashes, en dashes, or semicolons. Use commas or periods instead. Hyphens only in compound words.
+4. Add substance, not fluff: specifics, examples, context. Do not restate existing points in different words, and do not append a concluding paragraph that repeats what was already said.
+5. Aim for roughly double the length, but prioritize quality over word count.
+6. Preserve paragraph breaks. Add new paragraphs where natural.
+7. Write like a person: contractions, short sentences, no filler.
+
+EXAMPLE
+Input:
+<input_text>
+We're switching to the new build system next sprint. It should speed things up.
+</input_text>
+Output:
+We're switching to the new build system next sprint. The current setup rebuilds everything from scratch on every change, which is why a one line edit can still cost you four minutes.
+
+The new system caches intermediate artifacts and rebuilds only what actually changed. On the test branch, incremental builds dropped from about four minutes to under thirty seconds. Clean builds take about as long as they always did, so the win shows up in day to day work rather than in CI.`,
+
+  makeShorter: `You condense text to its essential points while preserving the core message and tone.
+
+RULES:
+1. Output ONLY the condensed text. No preamble, no commentary. Do not wrap the output in quotes.
+2. Plain text only. No markdown, headers, or bullet points.
+3. No em dashes, en dashes, or semicolons. Use commas or periods instead. Hyphens only in compound words.
+4. Cut filler, redundancy, and unnecessary qualifiers. Do not add a summary sentence that was not in the original.
+5. Aim for roughly half the original length while keeping every essential fact.
 6. Preserve paragraph breaks where the original has them.
-7. Sound human. Use contractions and direct phrasing.
+7. Write like a person: contractions and direct phrasing.
 
-TEXT:`
+EXAMPLE
+Input:
+<input_text>
+I wanted to reach out and let you know that, at this point in time, we are still in the process of reviewing the proposal that you sent over last week. There are a few outstanding questions that have come up on our end, and we will aim to get back to you with a more complete response by the end of the week.
+</input_text>
+Output:
+We're still reviewing the proposal you sent last week. A few questions came up, and we'll get back to you with a full response by the end of the week.`
 };
 
 // Handle response based on modifier keys
@@ -121,63 +187,52 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-// Check if error is a rate limit (429) error
-function isRateLimitError(error) {
-  return error.response && error.response.status === 429;
+// HTTP status of a failed request, or null if the request never got a response.
+function statusOf(error) {
+  return (error && error.response && error.response.status) || null;
 }
 
-// Check if error is retryable (network errors, 5xx, 429)
+// True only for transport-level failures (DNS, offline, timeout).
+// Deliberately narrow: an error we threw ourselves — a bad response shape, a
+// too-long selection — has neither marker, so it is NOT mistaken for a network
+// blip and retried at full price.
+function isNetworkError(error) {
+  return Boolean(error && !error.response && (error.isAxiosError || error.code));
+}
+
+// Retry only what a retry can actually fix.
 function isRetryableError(error) {
-  if (!error.response) {
-    // Network error, timeout, etc.
-    return true;
-  }
-  const status = error.response.status;
+  const status = statusOf(error);
+  if (status === null) return isNetworkError(error);
   return status === 429 || (status >= 500 && status < 600);
 }
 
 // Get user-friendly error message
 function getErrorMessage(error) {
-  if (isRateLimitError(error)) {
-    return "Rate limit exceeded. Please wait a moment and try again.";
-  }
-  if (!error.response) {
-    return "Network error. Please check your connection.";
-  }
-  if (error.response.status === 401) {
-    return "Invalid API key. Please check your settings.";
-  }
-  if (error.response.status === 403) {
-    return "Access denied. Please check your API key permissions.";
-  }
-  if (error.response.status >= 500) {
-    return "Server error. Please try again later.";
-  }
-  return error.message || "An unexpected error occurred.";
+  const status = statusOf(error);
+
+  if (status === 429) return "Rate limit exceeded. Please wait a moment and try again.";
+  if (status === 401) return "Invalid API key. Please check your settings.";
+  if (status === 403) return "Access denied. Please check your API key permissions.";
+  if (status === 404) return "Model unavailable. Your API key may not have access to it.";
+  if (status !== null && status >= 500) return "Server error. Please try again later.";
+
+  if (isNetworkError(error)) return "Network error. Please check your connection.";
+
+  // Our own errors carry a message written for the user; surface it verbatim.
+  return (error && error.message) || "An unexpected error occurred.";
 }
 
-// Route to appropriate API based on selected provider
-async function callLLMapi(prompt, options) {
-  const provider = options.model || "groq";
-  switch (provider) {
-    case "groq":    return await callGroqAPI(prompt, options);
-    case "openai":  return await callOpenAPI(prompt, options);
-    case "claude":  return await callClaudeAPI(prompt, options);
-    case "mistral": return await callMistralAPI(prompt, options);
-  }
-  throw new Error("Unknown provider: " + provider);
-}
-
-// Wrapper with retry logic
-async function callWithRetry(apiFunction, prompt, options) {
-  let lastError;
+// Wrapper with retry logic, bounded by an overall wall-clock deadline so a
+// string of slow attempts can never leave the user watching a spinner for
+// minutes (MAX_RETRIES x REQUEST_TIMEOUT would otherwise allow ~3 minutes).
+async function callWithRetry(apiFunction, payload, options) {
+  const deadline = Date.now() + TOTAL_DEADLINE_MS;
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
-      return await apiFunction(prompt, options);
+      return await apiFunction(payload, options);
     } catch (error) {
-      lastError = error;
-
       // Don't retry settings errors
       if (error.message && error.message.toLowerCase().startsWith("settings error")) {
         throw error;
@@ -188,52 +243,33 @@ async function callWithRetry(apiFunction, prompt, options) {
         throw error;
       }
 
-      // Wait before retrying (exponential backoff)
-      await sleep(RETRY_DELAY_MS * Math.pow(2, attempt));
-    }
-  }
-
-  throw lastError;
-}
-
-// --- GROQ API (Free, OpenAI-compatible)
-async function callGroqAPI(prompt, options) {
-  const key = (options.groqapikey || "").trim();
-  if (!key) {
-    throw new Error("Settings error: missing Groq API key. Get a free key at console.groq.com");
-  }
-
-  const { data } = await axios.post(
-    "https://api.groq.com/openai/v1/chat/completions",
-    {
-      model: PROVIDER_MODELS.groq,
-      max_tokens: MAX_TOKENS,
-      messages: [{ role: "user", content: prompt }]
-    },
-    {
-      timeout: REQUEST_TIMEOUT,
-      headers: {
-        Authorization: `Bearer ${key}`,
-        "Content-Type": "application/json"
+      // Out of time, or not enough left for another attempt to be worthwhile
+      const backoff = RETRY_DELAY_MS * Math.pow(2, attempt);
+      if (Date.now() + backoff >= deadline) {
+        throw error;
       }
+
+      await sleep(backoff);
     }
-  );
-  return data.choices[0].message.content.trim();
+  }
 }
 
 // --- CLAUDE API
-async function callClaudeAPI(prompt, options) {
+async function callClaudeAPI(payload, options) {
   const key = (options.claudeapikey || "").trim();
   if (!key) {
-    throw new Error("Settings error: missing Claude API key");
+    throw new Error("Settings error: missing Claude API key. Get one at console.anthropic.com/settings/keys");
   }
+
+  const model = MODELS[options.model] || MODELS.smart;
 
   const { data } = await axios.post(
     "https://api.anthropic.com/v1/messages",
     {
-      model: PROVIDER_MODELS.claude,
+      model: model,
       max_tokens: MAX_TOKENS,
-      messages: [{ role: "user", content: prompt }]
+      system: payload.system,
+      messages: [{ role: "user", content: payload.text }]
     },
     {
       timeout: REQUEST_TIMEOUT,
@@ -245,80 +281,78 @@ async function callClaudeAPI(prompt, options) {
       }
     }
   );
-  return data.content[0].text.trim();
-}
 
-// --- OPENAI API
-async function callOpenAPI(prompt, options) {
-  const key = (options.apikey || "").trim();
-  if (!key) {
-    throw new Error("Settings error: missing OpenAI API key");
+  // Validate the shape before indexing into it. A refusal or an unexpected
+  // payload yields an empty content array, and blind data.content[0].text
+  // would throw a TypeError that reads to the user as a network failure.
+  const blocks = data && Array.isArray(data.content) ? data.content : null;
+  if (!blocks) {
+    throw new Error("Unexpected response from Claude. Please try again.");
   }
 
-  const { data } = await axios.post(
-    "https://api.openai.com/v1/chat/completions",
-    {
-      model: PROVIDER_MODELS.openai,
-      max_tokens: MAX_TOKENS,
-      messages: [{ role: "user", content: prompt }]
-    },
-    {
-      timeout: REQUEST_TIMEOUT,
-      headers: {
-        Authorization: `Bearer ${key}`
-      }
-    }
-  );
-  return data.choices[0].message.content.trim();
-}
+  const text = blocks
+    .filter(block => block && block.type === "text" && typeof block.text === "string")
+    .map(block => block.text)
+    .join("")
+    .trim();
 
-// --- MISTRAL API
-async function callMistralAPI(prompt, options) {
-  const key = (options.mistralapikey || "").trim();
-  if (!key) {
-    throw new Error("Settings error: missing Mistral API key");
+  if (!text) {
+    throw new Error("Claude returned an empty response. Try rephrasing or selecting different text.");
   }
 
-  const { data } = await axios.post(
-    "https://api.mistral.ai/v1/chat/completions",
-    {
-      model: PROVIDER_MODELS.mistral,
-      max_tokens: MAX_TOKENS,
-      messages: [{ role: "user", content: prompt }]
-    },
-    {
-      timeout: REQUEST_TIMEOUT,
-      headers: {
-        Authorization: `Bearer ${key}`,
-        "Content-Type": "application/json",
-        Accept: "application/json"
-      }
-    }
-  );
-  return data.choices[0].message.content.trim();
+  return { text: text, truncated: data.stop_reason === "max_tokens" };
 }
 
 // Generic action runner with error handling and retry
 async function runAction(promptKey, input, options) {
   try {
-    let prompt = PROMPTS[promptKey];
+    const text = input.text.trim();
 
-    // Inject tone instruction for writing actions when not default
+    if (!text) {
+      throw new Error("Nothing to process. Select some text first.");
+    }
+
+    const limit = maxInputCharsFor(promptKey);
+    if (text.length > limit) {
+      throw new Error(
+        `Selection is too long (${text.length.toLocaleString()} characters, limit ` +
+        `${limit.toLocaleString()} for this action). Select a smaller passage.`
+      );
+    }
+
+    let system = PROMPTS[promptKey];
+
+    // Append tone as its own section for writing actions when not default.
+    // The example in each prompt is written in a neutral voice, so say plainly
+    // that it governs format rather than tone, or the model splits the
+    // difference between the example's voice and the requested one.
     const tone = options.tone || "default";
     if (tone !== "default" && TONE_ACTIONS.includes(promptKey)) {
       const toneInstruction = TONES[tone];
       if (toneInstruction) {
-        prompt = prompt.replace(/\nTEXT:$/, "\n" + toneInstruction + "\n\nTEXT:");
+        system += "\n\nTONE\n" + toneInstruction +
+          "\nApply this tone to your output. The example above shows formatting and structure, not tone.";
       }
     }
 
-    prompt += "\n\n" + input.text.trim();
+    // Instructions live in the system prompt; the user turn carries only the
+    // user's own content, delimited.
+    const payload = {
+      system: system,
+      text: `<${INPUT_TAG}>\n${text}\n</${INPUT_TAG}>`
+    };
 
-    // Use retry wrapper
-    const apiFunction = async (p, o) => callLLMapi(p, o);
-    const data = await callWithRetry(apiFunction, prompt, options);
+    const result = await callWithRetry(callClaudeAPI, payload, options);
 
-    prepareResponse(data);
+    // A truncated result must never overwrite the selection — pasting would
+    // replace good text with a sentence that stops mid-word. Put the partial
+    // on the clipboard so the spend isn't wasted, then report why.
+    if (result.truncated) {
+      popclip.copyText(result.text);
+      throw new Error("Response was cut off because it got too long. The partial result was copied to your clipboard. Try a smaller selection.");
+    }
+
+    prepareResponse(result.text);
   } catch (error) {
     // Re-throw settings errors to trigger PopClip settings UI
     if (error.message && error.message.toLowerCase().startsWith("settings error")) {
