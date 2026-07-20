@@ -84,7 +84,9 @@ Paste your Anthropic key from [console.anthropic.com/settings/keys](https://cons
 
 > **Upgrading from 1.x?** Versions through 1.2.0 stored API keys in PopClip's preferences file in cleartext rather than the Keychain. Rotate any key you entered in an earlier version, then re-enter the new one.
 
-Selections are capped at 50,000 characters so an accidental Select All can't run up a large bill.
+Selection size is capped per action so an accidental Select All can't run up a large bill, and so a
+result never gets cut off mid-sentence: 8,000 characters for Make Longer, 16,000 for Improve Writing
+and Spelling & Grammar, 32,000 for Make Shorter, 50,000 for Summarize.
 
 Usage is billed to your own Anthropic account. Typical actions run a few hundred tokens, so ordinary use costs cents per month.
 

@@ -90,7 +90,18 @@ The dropdown stores intent keys (`smart`, `fast`), not model IDs. The actual ID 
 - `stop_reason === "max_tokens"` → the partial is copied to the clipboard and an error is raised. It is never pasted: pasting replaces the user's selection, so a truncated response would destroy good text.
 
 **Input limits:**
-- Empty selection and selections over `MAX_INPUT_CHARS` (50,000) are rejected before any network call, so neither costs the user money.
+- Empty selections are rejected before any network call.
+- Selection size is capped **per action**, derived from `OUTPUT_CHAR_BUDGET` (16,000 chars ≈ `MAX_TOKENS`) divided by that action's `OUTPUT_RATIO`, then clamped to `MAX_INPUT_CHARS` (50,000):
+
+| Action | Ratio | Cap |
+|--------|-------|-----|
+| Improve Writing | 1× | 16,000 |
+| Spelling & Grammar | 1× | 16,000 |
+| Make Longer | 2× | 8,000 |
+| Make Shorter | 0.5× | 32,000 |
+| Summarize | 0.3× | 50,000 |
+
+  A single global cap was wrong in both directions: Make Longer is told to double its input, so anything over ~8,000 chars could not finish inside `MAX_TOKENS` and reliably hit the truncation path, while Summarize was restricted for no reason. Changing `MAX_TOKENS` should mean recomputing `OUTPUT_CHAR_BUDGET`.
 
 **Settings Errors:**
 - Messages starting with "Settings error:" trigger PopClip settings UI
@@ -113,15 +124,38 @@ The dropdown stores intent keys (`smart`, `fast`), not model IDs. The actual ID 
 
 ## Prompt Design
 
-All prompts follow consistent rules:
-1. Output ONLY the result (no preamble, explanations)
-2. NO markdown formatting (bold, italics, headers, bullets) — except Summarize allows bullet points for multi-topic content
-3. NO em dashes, en dashes, or semicolons. Hyphens only for compound words
+### Request shape
+
+Instructions go in the `system` parameter; the user turn carries only the user's own content, wrapped in `<input_text>` tags.
+
+```
+system:   PROMPTS[promptKey]  (+ TONE section when applicable)
+messages: [{ role: "user", content: "<input_text>\n{selection}\n</input_text>" }]
+```
+
+The delimiter is load-bearing. Concatenating the selection after a bare `TEXT:` label gave the model no way to tell content from instructions, so a selection containing a numbered list or an imperative sentence read as further instructions. Wrapping also contains prompt injection: text saying "ignore the above" stays visibly inside the tags.
+
+The one gap: a selection containing a literal `</input_text>` could still break out. Not sanitized, because rewriting the user's text to defend against it would corrupt legitimate output.
+
+### Prompt structure
+
+Each prompt is a role statement, numbered rules, and one worked example. The examples do heavy lifting for the style constraints — no em dashes, contractions, no AI voice — which models learn better from a demonstration than a description. When editing rules, check the example still demonstrates them.
+
+Shared conventions:
+1. Output only the result — no preamble, no wrapping quotes
+2. Plain text; Summarize alone may use `- ` bullets for multi-topic content
+3. No em dashes, en dashes, or semicolons — **except in Spelling & Grammar** (see below)
 4. Preserve paragraph breaks and line structure
-5. Writing prompts (Improve, Make Longer, Make Shorter) enforce a natural, human tone with contractions and short sentences
-6. Spelling & Grammar fixes capitalization and protects code, URLs, file paths, and technical terms from modification
-7. Summarize handles short input (under 2 sentences) gracefully with a one-sentence summary
-8. Tone injection: When tone is not "default", a tone instruction is appended after the prompt rules for writing actions only (Improve, Make Longer, Make Shorter). Does NOT apply to Spelling & Grammar or Summarize.
+5. Writing actions (Improve, Make Longer, Make Shorter) enforce a natural human voice
+6. Improve Writing returns input unchanged if it is already good, or if it is code/markup/structured data rather than prose
+
+### Spelling & Grammar is deliberately different
+
+It carries **no** punctuation-style rule, and explicitly instructs that em dashes and semicolons are not errors. The style rule exists to stop Claude writing em dashes in prose *it* generates; Spelling & Grammar doesn't generate prose, it preserves the user's. Applying the rule there made the prompt self-contradictory ("no semicolons" vs "fix only errors" vs "return unchanged if no errors") and produced a grammar checker that silently restyled correct punctuation. Its example deliberately keeps an em dash and a semicolon while fixing surrounding typos.
+
+### Tone injection
+
+For writing actions only, a non-default tone is appended to the system prompt as a `TONE` section, along with a line clarifying that the example governs formatting rather than voice — otherwise the model splits the difference between the example's neutral tone and the requested one. Does not apply to Spelling & Grammar or Summarize.
 
 ## Config.json Structure
 
