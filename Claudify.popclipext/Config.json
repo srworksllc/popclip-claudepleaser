@@ -1,6 +1,6 @@
 {
   "name": "Claudify",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "icon": "symbol:brain",
   "identifier": "com.srworks.popclip.extension.claudify",
   "description": "Enhance the selected text with Claude and paste the result. Hold Shift (\u21e7) to copy instead.",
@@ -181,7 +181,7 @@
     {
       "identifier": "version-heading",
       "type": "heading",
-      "label": "Version 3.0.0 \u00b7 srworks.co"
+      "label": "Version 3.0.1 \u00b7 srworks.co"
     }
   ]
 }
