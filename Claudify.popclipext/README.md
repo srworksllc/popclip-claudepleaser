@@ -1,6 +1,6 @@
 # Claudify
 
-A PopClip extension that enhances your selected text using AI. Select text, click an action, and get instant results.
+A PopClip extension that enhances your selected text using Claude. Select text, click an action, and get instant results.
 
 **Created by Steve Reinhardt | [SRWorks LLC](https://srworks.co)**
 
@@ -34,7 +34,7 @@ Tone does not apply to Spelling & Grammar or Summarize.
 ### Additional
 
 - Hold **Shift** to copy result instead of pasting
-- Plain text output (no markdown or special formatting)
+- Plain text output — no markdown or special formatting (Summarize alone may use `- ` bullets)
 - Automatic retry on network errors
 - Toggle individual actions on/off in settings
 - Two models — switch anytime in settings
@@ -78,6 +78,8 @@ Paste your Anthropic key from [console.anthropic.com/settings/keys](https://cons
 
 Translation does a light cleanup of your text first — fixing typos and shorthand — then translates while keeping your tone, register, and slang intact. It's a normalize-then-translate pass, not a rewrite, so lazy input comes out as clean, natural, still-you text in the target language.
 
+### Limits and Cost
+
 Selection size is capped per action so an accidental Select All can't run up a large bill, and so a
 result never gets cut off mid-sentence: 8,000 characters for Make Longer, roughly 12,300 for Translate,
 16,000 for Improve Writing and Spelling & Grammar, 32,000 for Make Shorter, 50,000 for Summarize.
@@ -87,7 +89,7 @@ Usage is billed to your own Anthropic account. Typical actions run a few hundred
 ## Usage
 
 1. Select text in any app
-2. Click an Claudify action
+2. Click a Claudify action
 3. Text is replaced with the result
 
 **Tip:** Hold **Shift** when clicking to copy the result instead of pasting.
