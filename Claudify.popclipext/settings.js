@@ -1,5 +1,5 @@
 /**
- * AI SuperClip - PopClip Extension
+ * Claudify - PopClip Extension
  *
  * Copyright (c) 2025 Steve Reinhardt, SR Works LLC
  * Licensed under the MIT License
@@ -35,7 +35,10 @@ const OUTPUT_RATIO = {
   correctSpellingGrammar: 1,
   makeLonger: 2,
   makeShorter: 0.5,
-  summarize: 0.3
+  summarize: 0.3,
+  // Translations run a bit longer than their source (Spanish/French expand
+  // ~20-30%), so leave headroom against the truncation path.
+  translate: 1.3
 };
 
 function maxInputCharsFor(promptKey) {
@@ -173,6 +176,72 @@ Output:
 We're still reviewing the proposal you sent last week. A few questions came up, and we'll get back to you with a full response by the end of the week.`
 };
 
+// --- TRANSLATE
+
+// Curated target languages. Each becomes a STATIC submenu item, gated by its
+// own settings toggle (option-lang-<code>), so users show only the languages
+// they use. The submenu must be static (built at module load, not a runtime
+// function) because PopClip refuses the `dynamic` entitlement alongside
+// `network`. Add a language here plus a matching lang-<code> toggle in
+// Config.json; the long tail is covered by the free-text "Other" item.
+const TRANSLATE_LANGS = [
+  { name: "Spanish", code: "es" },
+  { name: "French", code: "fr" },
+  { name: "German", code: "de" },
+  { name: "Portuguese", code: "pt" },
+  { name: "Italian", code: "it" },
+  { name: "Chinese (Simplified)", code: "zh" },
+  { name: "Japanese", code: "ja" },
+  { name: "Korean", code: "ko" }
+];
+
+// The translate action's system prompt. Normalize-then-translate: a light
+// mechanical cleanup of the source (rule 2) with hard guards against rewriting
+// or restyling it (rules 3-5), so lazy input becomes clean, natural, still-you
+// output in the target language.
+function translateSystem(language) {
+  return `You translate the user's text into ${language}. This is a translation, not a rewrite.
+
+RULES:
+1. Output ONLY the translation. No preamble, no commentary, no quotes, and do not include the original text.
+2. First, silently clean up the source: fix obvious typos, spelling, capitalization, and punctuation, and read any shorthand (u, tmrw, thx) as its intended words. This is a light touch to remove accidental errors only.
+3. Do NOT rephrase, restructure, formalize, or change the meaning, tone, voice, or level of slang. Keep it as something the user would actually say.
+4. Then translate into natural, native-sounding ${language}. Match the source's register: casual stays casual, formal stays formal, using the language's informal and formal "you" forms where it distinguishes them.
+5. Render slang and idioms as the natural equivalent a native speaker would use, never word-for-word. If there is no clean equivalent, use the closest real expression.
+6. Keep every name, number, date, and link. Leave proper nouns, @handles, URLs, code, and emojis exactly as written.
+7. Preserve paragraph breaks, greetings, and sign-offs.`;
+}
+
+// Resolve the system prompt for an action. Built-in actions read a template
+// from PROMPTS and may get a tone section appended; "translate" builds a
+// target-language prompt.
+function buildSystem(promptKey, options, params) {
+  if (promptKey === "translate") {
+    const language = params && params.language;
+    if (!language) {
+      throw new Error("No target language selected.");
+    }
+    return translateSystem(language);
+  }
+
+  let system = PROMPTS[promptKey];
+
+  // Append tone as its own section for writing actions when not default.
+  // The example in each prompt is written in a neutral voice, so say plainly
+  // that it governs format rather than tone, or the model splits the
+  // difference between the example's voice and the requested one.
+  const tone = options.tone || "default";
+  if (tone !== "default" && TONE_ACTIONS.includes(promptKey)) {
+    const toneInstruction = TONES[tone];
+    if (toneInstruction) {
+      system += "\n\nTONE\n" + toneInstruction +
+        "\nApply this tone to your output. The example above shows formatting and structure, not tone.";
+    }
+  }
+
+  return system;
+}
+
 // Handle response based on modifier keys
 function prepareResponse(data) {
   if (popclip.modifiers.shift) {
@@ -304,7 +373,7 @@ async function callClaudeAPI(payload, options) {
 }
 
 // Generic action runner with error handling and retry
-async function runAction(promptKey, input, options) {
+async function runAction(promptKey, input, options, params) {
   try {
     const text = input.text.trim();
 
@@ -320,20 +389,7 @@ async function runAction(promptKey, input, options) {
       );
     }
 
-    let system = PROMPTS[promptKey];
-
-    // Append tone as its own section for writing actions when not default.
-    // The example in each prompt is written in a neutral voice, so say plainly
-    // that it governs format rather than tone, or the model splits the
-    // difference between the example's voice and the requested one.
-    const tone = options.tone || "default";
-    if (tone !== "default" && TONE_ACTIONS.includes(promptKey)) {
-      const toneInstruction = TONES[tone];
-      if (toneInstruction) {
-        system += "\n\nTONE\n" + toneInstruction +
-          "\nApply this tone to your output. The example above shows formatting and structure, not tone.";
-      }
-    }
+    const system = buildSystem(promptKey, options, params);
 
     // Instructions live in the system prompt; the user turn carries only the
     // user's own content, delimited.
@@ -363,7 +419,7 @@ async function runAction(promptKey, input, options) {
     popclip.showFailure();
 
     // Log detailed error for debugging
-    console.log("AI SuperClip Error:", getErrorMessage(error));
+    console.log("Claudify Error:", getErrorMessage(error));
 
     throw new Error(getErrorMessage(error));
   }
@@ -390,35 +446,82 @@ async function makeShorter(input, options) {
   await runAction("makeShorter", input, options);
 }
 
+// Translate's language list, as a nested submenu inside the main dropdown.
+// Static, built at load time: a function-valued submenu would need the
+// `dynamic` entitlement, which PopClip refuses alongside `network`. Each
+// curated language is gated by its own toggle; the trailing "Other" item
+// translates into whatever the user typed in the free-text setting, covering
+// anything not in the curated list.
+const TRANSLATE_SUBMENU = TRANSLATE_LANGS
+  .map(lang => ({
+    title: lang.name,
+    icon: lang.code,
+    code: (input, options) => runAction("translate", input, options, { language: lang.name }),
+    requirements: ["text", `option-lang-${lang.code}=1`]
+  }))
+  .concat([
+    { separator: true },
+    {
+      title: "Other",
+      icon: "symbol:globe",
+      requirements: ["text", "option-lang-other=1"],
+      code: (input, options) => {
+        const language = (options.translateother || "").trim();
+        if (!language) {
+          throw new Error("Settings error: enter a language in the \"Other language\" field first.");
+        }
+        return runAction("translate", input, options, { language: language });
+      }
+    }
+  ]);
+
+// Single bar entry that opens a submenu (PopClip 5992+). Each child keeps its
+// own enable-* requirement so users can still hide individual actions from the
+// submenu via settings. The parent has no code of its own, so a primary click
+// opens the submenu directly rather than running anything.
 exports.actions = [
   {
-    title: "Improve Writing",
-    icon: "iconify:heroicons-solid:sparkles",
-    code: improveWriting,
-    requirements: ["text", "option-enable-improve-writing=1"]
-  },
-  {
-    title: "Correct Spelling & Grammar",
-    icon: "iconify:heroicons-solid:check-circle",
-    code: spellingAndGrammar,
-    requirements: ["text", "option-enable-spelling-grammar=1"]
-  },
-  {
-    title: "Make Longer",
-    icon: "iconify:heroicons-solid:plus-circle",
-    code: makeLonger,
-    requirements: ["text", "option-enable-make-longer=1"]
-  },
-  {
-    title: "Make Shorter",
-    icon: "iconify:heroicons-solid:minus-circle",
-    code: makeShorter,
-    requirements: ["text", "option-enable-make-shorter=1"]
-  },
-  {
-    title: "Summarize",
-    icon: "iconify:heroicons-solid:list-bullet",
-    code: summarize,
-    requirements: ["text", "option-enable-summarize=1"]
+    title: "Claudify",
+    icon: "symbol:brain",
+    requirements: ["text"],
+    submenu: [
+      {
+        title: "Improve Writing",
+        icon: "symbol:sparkles",
+        code: improveWriting,
+        requirements: ["text", "option-enable-improve-writing=1"]
+      },
+      {
+        title: "Correct Spelling & Grammar",
+        icon: "symbol:checkmark.circle",
+        code: spellingAndGrammar,
+        requirements: ["text", "option-enable-spelling-grammar=1"]
+      },
+      {
+        title: "Make Longer",
+        icon: "symbol:plus.circle",
+        code: makeLonger,
+        requirements: ["text", "option-enable-make-longer=1"]
+      },
+      {
+        title: "Make Shorter",
+        icon: "symbol:minus.circle",
+        code: makeShorter,
+        requirements: ["text", "option-enable-make-shorter=1"]
+      },
+      {
+        title: "Summarize",
+        icon: "symbol:list.bullet",
+        code: summarize,
+        requirements: ["text", "option-enable-summarize=1"]
+      },
+      { separator: true },
+      {
+        title: "Translate",
+        icon: "symbol:globe",
+        requirements: ["text", "option-enable-translate=1"],
+        submenu: TRANSLATE_SUBMENU
+      }
+    ]
   }
 ];

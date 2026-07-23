@@ -1,12 +1,12 @@
 {
-  "name": "AI SuperClip",
+  "name": "Claudify",
   "version": "2.0.0",
   "icon": "symbol:brain",
-  "identifier": "com.srworks.popclip.extension.ai-superclip",
+  "identifier": "com.srworks.popclip.extension.claudify",
   "description": "Enhance the selected text with Claude and paste the result. Hold Shift (\u21e7) to copy instead.",
   "author": "Steve Reinhardt",
   "authorURL": "https://srworks.co",
-  "popclipVersion": 4069,
+  "popclipVersion": 5992,
   "module": "settings.js",
   "entitlements": [
     "network"
@@ -96,6 +96,87 @@
       "type": "boolean",
       "defaultValue": true,
       "inset": true
+    },
+    {
+      "identifier": "enable-translate",
+      "label": "Translate",
+      "type": "boolean",
+      "defaultValue": true,
+      "inset": true
+    },
+    {
+      "identifier": "translate-heading",
+      "type": "heading",
+      "label": "Translate Languages"
+    },
+    {
+      "identifier": "lang-es",
+      "label": "Spanish",
+      "type": "boolean",
+      "defaultValue": true,
+      "inset": true
+    },
+    {
+      "identifier": "lang-fr",
+      "label": "French",
+      "type": "boolean",
+      "defaultValue": false,
+      "inset": true
+    },
+    {
+      "identifier": "lang-de",
+      "label": "German",
+      "type": "boolean",
+      "defaultValue": false,
+      "inset": true
+    },
+    {
+      "identifier": "lang-pt",
+      "label": "Portuguese",
+      "type": "boolean",
+      "defaultValue": false,
+      "inset": true
+    },
+    {
+      "identifier": "lang-it",
+      "label": "Italian",
+      "type": "boolean",
+      "defaultValue": false,
+      "inset": true
+    },
+    {
+      "identifier": "lang-zh",
+      "label": "Chinese (Simplified)",
+      "type": "boolean",
+      "defaultValue": false,
+      "inset": true
+    },
+    {
+      "identifier": "lang-ja",
+      "label": "Japanese",
+      "type": "boolean",
+      "defaultValue": false,
+      "inset": true
+    },
+    {
+      "identifier": "lang-ko",
+      "label": "Korean",
+      "type": "boolean",
+      "defaultValue": false,
+      "inset": true
+    },
+    {
+      "identifier": "lang-other",
+      "label": "Other (use field below)",
+      "type": "boolean",
+      "defaultValue": false,
+      "inset": true
+    },
+    {
+      "identifier": "translateother",
+      "label": "Other language",
+      "type": "string",
+      "description": "Any language not listed above, e.g. \"Tagalog\", \"Mexican Spanish\", or \"Brazilian Portuguese\". Turn on the \"Other\" toggle to show it in the Translate menu."
     },
     {
       "identifier": "version-heading",

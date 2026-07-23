@@ -1,27 +1,33 @@
-# CLAUDE.md - AI SuperClip Developer Guide
+# CLAUDE.md - Claudify Developer Guide
 
 ## Repository Info
 
 | Property | Value |
 |----------|-------|
-| **GitHub** | `srworksllc/popclip-ai-superclip` |
-| **Local Path** | `/Users/stephenreinhardt/Sites/popclip-ai-superclip` |
+| **GitHub** | `srworksllc/popclip-claudify` |
+| **Local Path** | `/Users/stephenreinhardt/Sites/popclip-claudify` |
 | **Type** | PopClip extension (macOS) |
-| **Extension** | `AI_SuperClip.popclipext` |
+| **Extension** | `Claudify.popclipext` |
 
 ## Overview
 
-AI SuperClip is a PopClip extension for macOS that enhances selected text using Claude. It is Anthropic-only: one API key, one endpoint. The dropdown selects a speed/quality tradeoff (`smart` or `fast`), and the actual model ID is resolved from `MODELS` in `settings.js`.
+Claudify is a PopClip extension for macOS that enhances selected text using Claude. It is Anthropic-only: one API key, one endpoint. The dropdown selects a speed/quality tradeoff (`smart` or `fast`), and the actual model ID is resolved from `MODELS` in `settings.js`.
 
 **Author:** Steve Reinhardt | SR Works LLC | https://srworks.co
 **License:** MIT
-**PopClip Version:** 4069+
+**PopClip Version:** 5992+ (PopClip 2026.7 or later)
+
+Everything is exposed as a **submenu** under one "Claudify" bar entry (`submenu` property, PopClip 5992+): the five built-in actions plus Translate. The parent has no `code`, so a primary click opens the submenu. Requiring 5992 is deliberate — there is no 4069-compatible fallback.
+
+**Translate** is the last child of that submenu and carries a **nested** submenu of its own (PopClip allows nesting). That nested menu is a **static** array (`TRANSLATE_SUBMENU`) built at module load from `TRANSLATE_LANGS`, one child per curated language, each gated by an `option-lang-<code>` toggle, plus a trailing free-text **Other** item. It was a second top-level bar action (globe icon) through v2.0.x; it was folded in so the extension owns exactly one slot in the PopClip bar.
+
+> **Why static, not dynamic:** a runtime-generated submenu needs the `dynamic` entitlement, and **PopClip rejects `dynamic` together with `network`** ("The 'dynamic' and 'network' entitlements are not allowed together"). Since Translate makes API calls, it must keep `network` and therefore cannot use a dynamic submenu. Adding a language = a row in `TRANSLATE_LANGS` **and** a matching `lang-<code>` toggle in Config.json. The long tail is covered by the single free-text **Other** slot.
 
 ## Project Structure
 
 ```
-popclip-ai-superclip/
-├── AI_SuperClip.popclipext/     # PopClip extension bundle
+popclip-claudify/
+├── Claudify.popclipext/     # PopClip extension bundle
 │   ├── Config.json              # Extension metadata and options
 │   ├── settings.js              # Main extension logic
 │   ├── package.json             # NPM package metadata
@@ -35,13 +41,20 @@ popclip-ai-superclip/
 
 | Action | Prompt Key | Icon | Description |
 |--------|------------|------|-------------|
-| Improve Writing | `improveWriting` | sparkles | Enhance clarity and flow, preserve voice |
-| Spelling & Grammar | `correctSpellingGrammar` | check-circle | Fix errors only, no rewording |
-| Make Longer | `makeLonger` | plus-circle | Expand with detail, roughly double length |
-| Make Shorter | `makeShorter` | minus-circle | Condense to essentials, roughly half length |
-| Summarize | `summarize` | list-bullet | Extract key points, 20-30% of original |
+| Improve Writing | `improveWriting` | `symbol:sparkles` | Enhance clarity and flow, preserve voice |
+| Spelling & Grammar | `correctSpellingGrammar` | `symbol:checkmark.circle` | Fix errors only, no rewording |
+| Make Longer | `makeLonger` | `symbol:plus.circle` | Expand with detail, roughly double length |
+| Make Shorter | `makeShorter` | `symbol:minus.circle` | Condense to essentials, roughly half length |
+| Summarize | `summarize` | `symbol:list.bullet` | Extract key points, 20-30% of original |
+| Translate | `translate` | `symbol:globe` (parent); per-language code badge (children) | Translate into a chosen language, normalize-then-translate |
+
+> **All icons are SF Symbols (`symbol:…`) or text badges — never `iconify:`.** SF Symbols are the best-practice choice for a macOS-native extension: native look, zero maintenance, and instant local rendering. Iconify icons are **fetched from the Iconify web API at render time**, which caused multi-second hover lag (icons not highlighting until fetched, though clicks still worked) — do not reintroduce them. If a specific non-SF shape is ever required, embed it as an inline `svg:` icon (local, also instant) rather than `iconify:`.
 
 **Modifier:** Hold Shift to copy instead of paste.
+
+All actions are children of a single `submenu` on one "Claudify" parent action. A `{ separator: true }` divides the five built-ins from Translate. Each child keeps its own `option-enable-*` requirement, so the settings toggles still hide individual actions from the submenu.
+
+**Translate** is the last child, gated by `option-enable-translate=1`, and its `submenu` is the module-level `TRANSLATE_SUBMENU` constant — a *static* array, not a function. It is built as `TRANSLATE_LANGS.map(...)` — each language becomes a child with `icon: lang.code` (a text badge like `es`), `requirements: ["text", "option-lang-<code>=1"]`, and a `code` that calls `runAction("translate", input, options, { language: lang.name })`. A `{ separator: true }` then an **Other** child follows: it reads `options.translateother`, throws a `Settings error:` if empty, else translates into that free-text language. Reading an option inside a `code` handler is normal and needs no entitlement — only *generating the submenu itself* at runtime would.
 
 ## Supported Models
 
@@ -65,6 +78,8 @@ The dropdown stores intent keys (`smart`, `fast`), not model IDs. The actual ID 
 - Configuration constants: `REQUEST_TIMEOUT` (60s), `MAX_RETRIES` (2), `RETRY_DELAY_MS` (500), `MODELS` (intent key→model ID map), `MAX_TOKENS` (4096)
 - `TONES` map and `TONE_ACTIONS` list — tone instructions injected into writing prompts when not "default"
 - `PROMPTS` object — 5 prompt templates (improveWriting, correctSpellingGrammar, summarize, makeLonger, makeShorter)
+- Translate helpers: `TRANSLATE_LANGS` (curated `{name, code}` list driving the static submenu), `translateSystem(language)` (builds the normalize-then-translate prompt for a target language)
+- `buildSystem(promptKey, options, params)` — resolves the system prompt: `translateSystem(params.language)` for `translate`, else `PROMPTS[key]` (+ tone section).
 - Utility functions: `prepareResponse()` (paste vs copy on Shift), `sleep()`, `isRateLimitError()`, `isRetryableError()`, `getErrorMessage()`
 - `callWithRetry()` — exponential backoff wrapper
 - `callClaudeAPI()` — the single API call; resolves its model via `MODELS[options.model]`
@@ -100,6 +115,9 @@ The dropdown stores intent keys (`smart`, `fast`), not model IDs. The actual ID 
 | Make Longer | 2× | 8,000 |
 | Make Shorter | 0.5× | 32,000 |
 | Summarize | 0.3× | 50,000 |
+| Translate | 1.3× | ~12,300 |
+
+  A key with no `OUTPUT_RATIO` entry falls back to `1×` → 16,000. `translate` uses `1.3×` because translations run longer than their source.
 
   A single global cap was wrong in both directions: Make Longer is told to double its input, so anything over ~8,000 chars could not finish inside `MAX_TOKENS` and reliably hit the truncation path, while Summarize was restricted for no reason. Changing `MAX_TOKENS` should mean recomputing `OUTPUT_CHAR_BUDGET`.
 
@@ -173,6 +191,10 @@ For writing actions only, a non-default tone is appended to the system prompt as
 | `enable-make-longer` | boolean | Toggle Make Longer action |
 | `enable-make-shorter` | boolean | Toggle Make Shorter action |
 | `enable-summarize` | boolean | Toggle Summarize action |
+| `enable-translate` | boolean | Toggle the Translate item (and its nested language menu) |
+| `lang-es` … `lang-ko` | boolean | Per-language toggles; each gates one static submenu item via `option-lang-<code>=1`. `lang-es` defaults on. |
+| `lang-other` | boolean | Shows the free-text **Other** submenu item |
+| `translateother` | string | Free-text target language for the Other item. Read in JS as `options.translateother`. |
 
 ### Action Requirements Format
 
@@ -242,7 +264,7 @@ defaults write com.pilotmoon.popclip EnableExtensionDebug -bool YES
 
 View logs in Console.app:
 - Filter: `Process:PopClip Category:Extension`
-- Look for: `AI SuperClip Error:` messages
+- Look for: `Claudify Error:` messages
 
 Disable debug mode:
 ```bash
@@ -275,10 +297,11 @@ defaults delete com.pilotmoon.popclip EnableExtensionDebug
 
 ### Icon Formats
 
-- Text: `"AI"` (up to 3 chars)
-- SF Symbols: `symbol:brain`
-- Iconify: `iconify:heroicons-solid:sparkles`
-- File: `file:icon.png`
+- SF Symbols: `symbol:brain` — local, instant. **This is what the extension uses (best practice).**
+- Text: `"AI"` (up to 3 chars) — local, instant (used for language badges)
+- Inline SVG: `svg:<svg ...>...</svg>` — local, instant; use `fill="currentColor"` so PopClip recolors it. Fallback for shapes SF Symbols don't cover.
+- File: `file:icon.png` / `file:icon.svg` — bundled, local
+- Iconify: `iconify:heroicons-solid:sparkles` — **avoid**: fetched from the Iconify web API at render time → hover lag
 
 ### Built-in Modules
 
@@ -291,6 +314,7 @@ Available via `require()`:
 
 - Sandbox: No filesystem access
 - Network: HTTPS only, requires `network` entitlement
+- Dynamic submenus (functions that generate child actions at open time) require the `dynamic` entitlement, which **cannot** be combined with `network`. This extension needs `network`, so all submenus are static arrays built at load time.
 - Language: ES2023 supported
 
 ## Future Improvements
@@ -298,12 +322,17 @@ Available via `require()`:
 **Medium Priority:**
 - Temperature option for AI creativity control
 - Max tokens option for output length control
+- `allow other` on the Tone dropdown for a free-text custom tone (needs `buildSystem` to pass an unknown tone string through instead of `TONES` lookup)
 
 **Low Priority:**
-- Custom prompt action for power users
 - Additional modifier keys for different behaviors
 - HTML/Markdown capture with `captureHtml`
 - Localization support
+
+**Done (v2.1.0):**
+- Submenu consolidation (single bar icon → `submenu`)
+- Removed the Custom Prompt action, its `customprompt`/`enable-custom` options, and `CUSTOM_BASE`
+- Translate action with a static per-language submenu (toggles + free-text Other) and a normalize-then-translate prompt that preserves tone and slang, nested inside the main Claudify dropdown rather than a second bar icon
 
 ---
 

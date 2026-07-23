@@ -1,4 +1,4 @@
-# AI SuperClip
+# Claudify
 
 A PopClip extension that enhances your selected text using AI. Select text, click an action, and get instant results.
 
@@ -13,6 +13,9 @@ A PopClip extension that enhances your selected text using AI. Select text, clic
 | **Make Longer** | Expand with relevant detail and examples |
 | **Make Shorter** | Condense to essential points |
 | **Summarize** | Extract key points and action items |
+| **Translate** | Translate into any language you add, preserving your tone and slang |
+
+Everything lives under a single **Claudify** (brain) icon in the PopClip bar — click it to open the submenu. **Translate** sits at the bottom of that menu and opens its own language list.
 
 ### Tone
 
@@ -49,7 +52,7 @@ Powered by Claude. Pick the tradeoff you want in settings.
 
 ## Requirements
 
-- [PopClip](https://pilotmoon.com/popclip/) for macOS
+- [PopClip](https://pilotmoon.com/popclip/) **2026.7 or later** (build 5992+) for macOS — required for the single-icon submenu and its nested Translate menu
 - An [Anthropic API key](https://console.anthropic.com/settings/keys)
 
 ## Quick Start
@@ -61,7 +64,7 @@ Powered by Claude. Pick the tradeoff you want in settings.
 
 ## Configuration
 
-Open PopClip menu bar icon, then click the gear on AI SuperClip.
+Open PopClip menu bar icon, then click the gear on Claudify.
 
 ### API Key
 
@@ -69,16 +72,22 @@ Paste your Anthropic key from [console.anthropic.com/settings/keys](https://cons
 
 > **Upgrading from 1.x?** Versions through 1.2.0 stored API keys in PopClip's preferences file in cleartext rather than the Keychain. Rotate any key you entered in an earlier version, then re-enter the new one.
 
+### Translate
+
+**Translate**, at the bottom of the Claudify menu, opens a list of the languages you've enabled. In settings, flip on the ones you want — Spanish (on by default), French, German, Portuguese, Italian, Chinese (Simplified), Japanese, Korean — and each appears in the menu with a short code badge (`es`, `fr`, …). For anything not in the list, turn on **Other** and type the language in the **Other language** field, e.g. "Tagalog", "Mexican Spanish", or "Brazilian Portuguese".
+
+Translation does a light cleanup of your text first — fixing typos and shorthand — then translates while keeping your tone, register, and slang intact. It's a normalize-then-translate pass, not a rewrite, so lazy input comes out as clean, natural, still-you text in the target language.
+
 Selection size is capped per action so an accidental Select All can't run up a large bill, and so a
-result never gets cut off mid-sentence: 8,000 characters for Make Longer, 16,000 for Improve Writing
-and Spelling & Grammar, 32,000 for Make Shorter, 50,000 for Summarize.
+result never gets cut off mid-sentence: 8,000 characters for Make Longer, roughly 12,300 for Translate,
+16,000 for Improve Writing and Spelling & Grammar, 32,000 for Make Shorter, 50,000 for Summarize.
 
 Usage is billed to your own Anthropic account. Typical actions run a few hundred tokens, so ordinary use costs cents per month.
 
 ## Usage
 
 1. Select text in any app
-2. Click an AI SuperClip action
+2. Click an Claudify action
 3. Text is replaced with the result
 
 **Tip:** Hold **Shift** when clicking to copy the result instead of pasting.
