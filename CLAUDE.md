@@ -255,6 +255,16 @@ Edit the relevant key in `PROMPTS` object. Follow existing structure:
 - Rewrites the Model ID cell of any table row whose key matches a `MODELS` key, in CLAUDE.md and both READMEs
 - Hand-written labels ("Smarter", "Faster") are NOT auto-derived — update them manually if the tradeoff a model represents changes
 
+## Distribution
+
+Claudify is **self-distributed** from this repo's GitHub Releases. It is deliberately **not** submitted to the official PopClip Extensions Directory. Don't re-litigate this without new information:
+
+- The only submission path is a PR into the `contrib` folder of [pilotmoon/PopClip-Extensions](https://github.com/pilotmoon/PopClip-Extensions). Merging into `contrib` is *not* publication — `contrib` is explicitly "unpublished / user-contributed / experimental / niche / archived (not maintained or supported)". Listing on popclip.app requires the maintainer to separately promote it into `source`.
+- As of Jul 2026, LLM-wrapper submissions stall indefinitely: PRs #1316, #1322, #1323, #1331 (Gemini, ChatGPT Prompt, AI Translate, LLMTranslate) sat open for 3–6 months with no maintainer reply, while non-AI utilities merged within days.
+- The directory's criteria also cut against this extension's design: "clear, single purpose" and "just works with minimal configuration" versus ~25 options, and a naming style ("Uppercase", not "Convert to Uppercase") that "Claudify" doesn't fit.
+
+**Consequence — the unsigned warning is permanent.** Directory extensions are digitally signed; ours isn't. PopClip shows an "Unsigned Extension" dialog on install for any non-directory extension carrying the `network` entitlement, which Claudify requires. This is expected, not a bug. It is explained in the top-level README under *About the "Unsigned Extension" warning* — keep that section accurate, since it's the only thing standing between a new user and a dialog that reads like a malware alert.
+
 ## Debugging
 
 Enable debug mode:
@@ -329,7 +339,7 @@ Available via `require()`:
 - HTML/Markdown capture with `captureHtml`
 - Localization support
 
-**Done (v2.1.0):**
+**Done (v3.0.0):**
 - Submenu consolidation (single bar icon → `submenu`)
 - Removed the Custom Prompt action, its `customprompt`/`enable-custom` options, and `CUSTOM_BASE`
 - Translate action with a static per-language submenu (toggles + free-text Other) and a normalize-then-translate prompt that preserves tone and slang, nested inside the main Claudify dropdown rather than a second bar icon
