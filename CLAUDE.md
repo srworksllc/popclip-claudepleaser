@@ -48,7 +48,7 @@ popclip-claudify/
 | Summarize | `summarize` | `symbol:list.bullet` | Extract key points, 20-30% of original |
 | Translate | `translate` | `symbol:globe` (parent); per-language code badge (children) | Translate into a chosen language, normalize-then-translate |
 
-> **All icons are SF Symbols (`symbol:…`) or text badges — never `iconify:`.** SF Symbols are the best-practice choice for a macOS-native extension: native look, zero maintenance, and instant local rendering. Iconify icons are **fetched from the Iconify web API at render time**, which caused multi-second hover lag (icons not highlighting until fetched, though clicks still worked) — do not reintroduce them. If a specific non-SF shape is ever required, embed it as an inline `svg:` icon (local, also instant) rather than `iconify:`.
+> **All icons are SF Symbols (`symbol:…`), text badges, or one inline `svg:` — never `iconify:`.** The parent "Claudify" entry uses the Claude mark as an inline `svg:` (`CLAUDE_ICON` in settings.js, mirrored into Config.json's `icon` field), because SF Symbols has no Claude glyph; everything below it is SF Symbols. SF Symbols are the best-practice choice for a macOS-native extension: native look, zero maintenance, and instant local rendering. Iconify icons are **fetched from the Iconify web API at render time**, which caused multi-second hover lag (icons not highlighting until fetched, though clicks still worked) — do not reintroduce them. If a specific non-SF shape is ever required, embed it as an inline `svg:` icon (local, also instant) rather than `iconify:`.
 
 **Modifier:** Hold Shift to copy instead of paste.
 
@@ -307,9 +307,9 @@ defaults delete com.pilotmoon.popclip EnableExtensionDebug
 
 ### Icon Formats
 
-- SF Symbols: `symbol:brain` — local, instant. **This is what the extension uses (best practice).**
+- SF Symbols: `symbol:sparkles` — local, instant. **This is what the extension uses for every action (best practice).**
 - Text: `"AI"` (up to 3 chars) — local, instant (used for language badges)
-- Inline SVG: `svg:<svg ...>...</svg>` — local, instant; use `fill="currentColor"` so PopClip recolors it. Fallback for shapes SF Symbols don't cover.
+- Inline SVG: `svg:<svg ...>...</svg>` — local, instant; use `fill="currentColor"` so PopClip recolors it. Used for the Claude mark on the parent entry (`CLAUDE_ICON` in settings.js), which SF Symbols has no equivalent for.
 - File: `file:icon.png` / `file:icon.svg` — bundled, local
 - Iconify: `iconify:heroicons-solid:sparkles` — **avoid**: fetched from the Iconify web API at render time → hover lag
 

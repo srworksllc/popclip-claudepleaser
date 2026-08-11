@@ -15,7 +15,7 @@ A PopClip extension that enhances your selected text using Claude. Select text, 
 | **Summarize** | Extract key points and action items |
 | **Translate** | Translate into any language you add, preserving your tone and slang |
 
-Everything lives under a single **Claudify** (brain) icon in the PopClip bar — click it to open the submenu. **Translate** sits at the bottom of that menu and opens its own language list.
+Everything lives under a single **Claudify** (Claude logo) icon in the PopClip bar — click it to open the submenu. **Translate** sits at the bottom of that menu and opens its own language list.
 
 ### Tone
 
