@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Release Script for Claudify (PopClip Extension)
+# Release Script for Claudepleaser (PopClip Extension)
 #
 # Usage:
 #   ./release.sh <version>    Build, tag, push, and create GitHub release
@@ -14,11 +14,11 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
-EXT_DIR="Claudify.popclipext"
+EXT_DIR="Claudepleaser.popclipext"
 CONFIG_FILE="$EXT_DIR/Config.json"
 PACKAGE_FILE="$EXT_DIR/package.json"
-ZIP_NAME="Claudify.popclipextz"
-GITHUB_REPO="srworksllc/popclip-claudify"
+ZIP_NAME="Claudepleaser.popclipextz"
+GITHUB_REPO="srworksllc/popclip-claudepleaser"
 
 NEW_VERSION="$1"
 
@@ -73,7 +73,7 @@ if ! command -v gh &>/dev/null; then
 fi
 
 echo "========================================"
-echo "  Claudify — Release $CURRENT_VERSION → $NEW_VERSION"
+echo "  Claudepleaser — Release $CURRENT_VERSION → $NEW_VERSION"
 echo "========================================"
 
 # ── Step 1: Version bump ─────────────────────────────────────────────
@@ -118,7 +118,7 @@ python3 << 'PYEOF'
 import re, os
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath("release.sh")) or "."
-EXT_DIR = os.path.join(SCRIPT_DIR, "Claudify.popclipext")
+EXT_DIR = os.path.join(SCRIPT_DIR, "Claudepleaser.popclipext")
 SETTINGS = os.path.join(EXT_DIR, "settings.js")
 CLAUDE_MD = os.path.join(SCRIPT_DIR, "CLAUDE.md")
 README = os.path.join(SCRIPT_DIR, "README.md")
@@ -236,7 +236,7 @@ EOF
 
 gh release create "v$NEW_VERSION" "$ZIP_NAME" \
   --repo "$GITHUB_REPO" \
-  --title "Claudify v$NEW_VERSION" \
+  --title "Claudepleaser v$NEW_VERSION" \
   --notes-file "$NOTES_FILE"
 
 rm -f "$NOTES_FILE"
@@ -255,7 +255,7 @@ echo "  Removed $ZIP_NAME"
 
 echo ""
 echo "========================================"
-echo "  Claudify v$NEW_VERSION released!"
+echo "  Claudepleaser v$NEW_VERSION released!"
 echo "========================================"
 echo ""
 echo "  Tag:     v$NEW_VERSION"

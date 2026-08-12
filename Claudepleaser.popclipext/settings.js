@@ -1,5 +1,5 @@
 /**
- * Claudify - PopClip Extension
+ * Claudepleaser - PopClip Extension
  *
  * Copyright (c) 2025 Steve Reinhardt, SR Works LLC
  * Licensed under the MIT License
@@ -30,11 +30,16 @@ const TOTAL_DEADLINE_MS = 90000;
 // can't run up a surprise bill on the user's own API key.
 const MAX_INPUT_CHARS = 50000;
 
-// Output has to fit inside MAX_TOKENS, which is roughly this many characters
-// of English. Each action expands or contracts its input by a different
-// factor, so a single global cap is wrong in both directions: it lets Make
-// Longer truncate on inputs it can never finish, while needlessly restricting
-// Summarize. Derive the real limit per action instead.
+// Target output size in characters. Each action expands or contracts its input
+// by a different factor, so a single global cap is wrong in both directions: it
+// lets Make Longer truncate on inputs it can never finish, while needlessly
+// restricting Summarize. Derive the real limit per action instead.
+//
+// This is deliberately well under what MAX_TOKENS can hold. The old 1:1 sizing
+// (16,000 chars against a 4,096-token ceiling) assumed ~3.9 chars/token, which
+// is an English-prose figure for an older tokenizer. Sonnet 5 tokenizes to
+// roughly 30% more tokens for the same text, and CJK translation targets are
+// far denser still, so that sizing truncated in practice rather than in theory.
 const OUTPUT_CHAR_BUDGET = 16000;
 
 const OUTPUT_RATIO = {
@@ -60,13 +65,27 @@ function maxInputCharsFor(promptKey) {
 const INPUT_TAG = "input_text";
 
 // Dropdown key → Claude model ID. Update here when Anthropic ships a new model.
-// Last verified: Jul 2026
+// Last verified: Aug 2026
 const MODELS = {
   fast: "claude-haiku-4-5",
   smart: "claude-sonnet-5"
 };
 
-const MAX_TOKENS = 4096;
+// Models that run adaptive thinking when the `thinking` field is unset. For
+// those we disable it explicitly: every action here is a direct transformation
+// rather than a reasoning problem, and thinking tokens come out of the same
+// MAX_TOKENS budget the answer needs. Older models don't think unless asked, so
+// the field is simply omitted for them rather than sent as "disabled" — no need
+// to depend on whether they'd accept it.
+const THINKS_BY_DEFAULT = new Set(["claude-sonnet-5"]);
+
+// Hard ceiling on generated output. On Sonnet 5 this caps thinking *and*
+// response text together, which is why thinking is disabled explicitly in
+// callClaudeAPI: these actions are direct transformations, not reasoning
+// problems, so every thinking token would come straight out of the budget the
+// answer needs. 16,000 is the documented ceiling for a non-streaming request;
+// going higher requires streaming to avoid an HTTP timeout.
+const MAX_TOKENS = 16000;
 
 // Tone instructions (injected into writing prompts when not "default")
 const TONES = {
@@ -86,14 +105,15 @@ const PROMPTS = {
 
 RULES:
 1. Output ONLY the rewritten text. No preamble, no commentary. Do not wrap the output in quotes.
-2. Plain text only. No markdown, headers, or bullet points.
+2. Plain text only. Do not add markdown, headers, or bullet points that were not already in the text.
 3. No em dashes, en dashes, or semicolons. Use commas or periods instead. Hyphens only in compound words.
-4. Keep roughly the original length. Cutting filler is fine, but do not add or remove substance.
+4. Keep roughly the original length. Cutting filler is fine, but do not add or remove substance. Never introduce facts, figures, names, or detail that are not in the original.
 5. Preserve the author's voice. Make it clearer, not different.
 6. Preserve paragraph breaks and line structure.
 7. Write like a person: contractions, short sentences, no filler such as "essentially", "basically", or "in order to".
 8. If the text is already clear and well written, return it unchanged.
 9. If the text is code, markup, a URL, a file path, or structured data rather than prose, return it unchanged.
+10. If the selection is a fragment rather than a complete sentence, improve it as a fragment. Do not complete it into a sentence, and do not add a capital letter or terminal punctuation it did not already have.
 
 EXAMPLE
 Input:
@@ -101,7 +121,9 @@ Input:
 It is essentially the case that our team was not able to complete the deliverable in a timely fashion — this was due to the fact that there were a number of blockers; we are working to resolve them.
 </input_text>
 Output:
-Our team missed the deadline because several blockers got in the way. We're working through them now.`,
+Our team missed the deadline because several blockers got in the way. We're working through them now.
+
+The example shows format and structure only. Match the length and complexity of the actual input, not the example.`,
 
   correctSpellingGrammar: `You fix spelling, grammar, punctuation, and capitalization errors in text. You do not rewrite.
 
@@ -113,6 +135,7 @@ RULES:
 5. Preserve paragraph breaks, line structure, and formatting.
 6. Do not modify code, URLs, file paths, variable names, or technical terms.
 7. If the text contains no errors, return it unchanged.
+8. If the selection is a fragment rather than a complete sentence, correct it as a fragment. Rule 4 does not apply: do not add a capital letter or terminal punctuation the fragment did not already have.
 
 EXAMPLE
 Input:
@@ -129,7 +152,7 @@ RULES:
 2. Plain text. No bold, italics, or headers. Plain "- " bullets are allowed when the text covers several distinct topics.
 3. No em dashes, en dashes, or semicolons. Use commas or periods instead. Hyphens only in compound words.
 4. Aim for 20 to 30 percent of the original length.
-5. Plain, objective language. No opinions, interpretation, or editorializing.
+5. Plain, objective language. No opinions, interpretation, or editorializing. Every statement must be supported by the text: never introduce facts, figures, or detail that are not there.
 6. If the input is shorter than about two sentences, return its core point in one sentence.
 
 EXAMPLE
@@ -146,33 +169,40 @@ The Q3 launch moves from September 12 to October 3 because QA found two blocking
 
 RULES:
 1. Output ONLY the expanded text. No preamble, no commentary. Do not wrap the output in quotes.
-2. Plain text only. No markdown, headers, or bullet points.
+2. Plain text only. Do not add markdown, headers, or bullet points that were not already in the text.
 3. No em dashes, en dashes, or semicolons. Use commas or periods instead. Hyphens only in compound words.
-4. Add substance, not fluff: specifics, examples, context. Do not restate existing points in different words, and do not append a concluding paragraph that repeats what was already said.
-5. Aim for roughly double the length, but prioritize quality over word count.
-6. Preserve paragraph breaks. Add new paragraphs where natural.
-7. Write like a person: contractions, short sentences, no filler.
+4. Never invent facts. Do not add dates, durations, counts, measurements, versions, names, causes, history, or current state that the text does not already contain. If you would have to guess it, leave it out. This rule outranks every other rule here.
+5. Expand by drawing out what is already present: make the reasoning explicit, spell out an implication or consequence, state an instruction more precisely, define a term the reader may not know, or say plainly what was only implied. That is expansion. Asserting new information is not.
+6. Aim for roughly double the length, but accuracy outranks length. If the text does not contain enough to expand honestly, expand as far as it honestly goes and stop. A shorter accurate result is a correct result. Do not append a concluding paragraph that just repeats what was already said.
+7. Preserve paragraph breaks. Add new paragraphs where natural.
+8. Write like a person: contractions, short sentences, no filler.
+9. If the selection is a fragment or a single short sentence, expand it to at most a short paragraph.
 
 EXAMPLE
 Input:
 <input_text>
-We're switching to the new build system next sprint. It should speed things up.
+We need to restart the database server, not the web server.
 </input_text>
 Output:
-We're switching to the new build system next sprint. The current setup rebuilds everything from scratch on every change, which is why a one line edit can still cost you four minutes.
+We need to restart the database server. To be clear, that means the database host specifically, not the web server.
 
-The new system caches intermediate artifacts and rebuilds only what actually changed. On the test branch, incremental builds dropped from about four minutes to under thirty seconds. Clean builds take about as long as they always did, so the win shows up in day to day work rather than in CI.`,
+The distinction matters because those are separate machines. Restarting the wrong one takes down a service we are not trying to touch, and it leaves the actual problem in place. Before you bring anything down, double check which host you are connected to.
+
+Note what the example does not do: it adds no uptime, no traffic levels, no error counts, no timings. The input contained none of those, so neither does the output. It expands by making the instruction explicit and stating why it matters, both of which follow from the input itself.
+
+The example shows format and structure only. Scale your output to the actual input, not to the example.`,
 
   makeShorter: `You condense text to its essential points while preserving the core message and tone.
 
 RULES:
 1. Output ONLY the condensed text. No preamble, no commentary. Do not wrap the output in quotes.
-2. Plain text only. No markdown, headers, or bullet points.
+2. Plain text only. Do not add markdown, headers, or bullet points that were not already in the text.
 3. No em dashes, en dashes, or semicolons. Use commas or periods instead. Hyphens only in compound words.
 4. Cut filler, redundancy, and unnecessary qualifiers. Do not add a summary sentence that was not in the original.
 5. Aim for roughly half the original length while keeping every essential fact.
 6. Preserve paragraph breaks where the original has them.
 7. Write like a person: contractions and direct phrasing.
+8. If the selection is already a single short sentence or a fragment, return it unchanged rather than compressing it further.
 
 EXAMPLE
 Input:
@@ -180,7 +210,9 @@ Input:
 I wanted to reach out and let you know that, at this point in time, we are still in the process of reviewing the proposal that you sent over last week. There are a few outstanding questions that have come up on our end, and we will aim to get back to you with a more complete response by the end of the week.
 </input_text>
 Output:
-We're still reviewing the proposal you sent last week. A few questions came up, and we'll get back to you with a full response by the end of the week.`
+We're still reviewing the proposal you sent last week. A few questions came up, and we'll get back to you with a full response by the end of the week.
+
+The example shows format and structure only. Scale your output to the actual input, not to the example.`
 };
 
 // --- TRANSLATE
@@ -216,7 +248,8 @@ RULES:
 4. Then translate into natural, native-sounding ${language}. Match the source's register: casual stays casual, formal stays formal, using the language's informal and formal "you" forms where it distinguishes them.
 5. Render slang and idioms as the natural equivalent a native speaker would use, never word-for-word. If there is no clean equivalent, use the closest real expression.
 6. Keep every name, number, date, and link. Leave proper nouns, @handles, URLs, code, and emojis exactly as written.
-7. Preserve paragraph breaks, greetings, and sign-offs.`;
+7. Preserve paragraph breaks, greetings, and sign-offs.
+8. If the text is already in ${language}, return it with only the rule 2 cleanup applied. Do not re-translate it, do not route it through another language, and do not reword it.`;
 }
 
 // Resolve the system prompt for an action. Built-in actions read a template
@@ -249,19 +282,20 @@ function buildSystem(promptKey, options, params) {
   return system;
 }
 
-// Handle response based on modifier keys
-function prepareResponse(data) {
+// Handle response based on modifier keys. Awaited by the caller: pasteText and
+// copyText both return promises, and an un-awaited paste lets the action's
+// handler resolve while the paste is still in flight, leaving PopClip free to
+// tear the invocation down underneath it.
+async function prepareResponse(data) {
   if (popclip.modifiers.shift) {
-    popclip.copyText(data);
+    await popclip.copyText(data);
   } else {
-    popclip.pasteText(data);
+    await popclip.pasteText(data);
   }
 }
 
-// Sleep utility for retry delays
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
+// PopClip provides a global sleep() that wraps setTimeout as a promise, so
+// there is no local one to define.
 
 // HTTP status of a failed request, or null if the request never got a response.
 function statusOf(error) {
@@ -283,6 +317,29 @@ function isRetryableError(error) {
   return status === 429 || (status >= 500 && status < 600);
 }
 
+// Ask PopClip to open the settings pane. The error is tagged so the retry path
+// and the top-level handler can recognize it by identity rather than by
+// matching a "settings error:" prefix on the message text, which broke as soon
+// as any other message happened to start with those words.
+function settingsError(message) {
+  const error = popclip.settingsRequiredError(message);
+  error.isSettingsError = true;
+  return error;
+}
+
+function isSettingsError(error) {
+  return Boolean(error && error.isSettingsError);
+}
+
+// How long Anthropic asked us to wait, in ms, or null if it didn't say.
+// Sent on 429 and preferred over our own backoff: retrying a rate limit after
+// 500ms is guaranteed to fail again and wastes one of only two attempts.
+function retryAfterMs(error) {
+  const headers = error && error.response && error.response.headers;
+  const seconds = headers ? Number(headers["retry-after"]) : NaN;
+  return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : null;
+}
+
 // Get user-friendly error message
 function getErrorMessage(error) {
   const status = statusOf(error);
@@ -299,6 +356,22 @@ function getErrorMessage(error) {
   return (error && error.message) || "An unexpected error occurred.";
 }
 
+// Raw failure detail for the Console log: the API's own error body when there
+// is one, else the thrown message. Distinct from getErrorMessage, which is the
+// sanitized string shown in the PopClip bar — logging that one told us nothing
+// the user couldn't already see.
+function debugDetail(error) {
+  const data = error && error.response && error.response.data;
+  if (data) {
+    try {
+      return JSON.stringify(data);
+    } catch (ignored) {
+      // Non-serializable body; fall through to the message.
+    }
+  }
+  return (error && error.message) || String(error);
+}
+
 // Wrapper with retry logic, bounded by an overall wall-clock deadline so a
 // string of slow attempts can never leave the user watching a spinner for
 // minutes (MAX_RETRIES x REQUEST_TIMEOUT would otherwise allow ~3 minutes).
@@ -310,7 +383,7 @@ async function callWithRetry(apiFunction, payload, options) {
       return await apiFunction(payload, options);
     } catch (error) {
       // Don't retry settings errors
-      if (error.message && error.message.toLowerCase().startsWith("settings error")) {
+      if (isSettingsError(error)) {
         throw error;
       }
 
@@ -319,8 +392,9 @@ async function callWithRetry(apiFunction, payload, options) {
         throw error;
       }
 
-      // Out of time, or not enough left for another attempt to be worthwhile
-      const backoff = RETRY_DELAY_MS * Math.pow(2, attempt);
+      // Honor Retry-After when the server sent one, else exponential backoff.
+      // Out of time, or not enough left for another attempt to be worthwhile.
+      const backoff = retryAfterMs(error) || RETRY_DELAY_MS * Math.pow(2, attempt);
       if (Date.now() + backoff >= deadline) {
         throw error;
       }
@@ -334,19 +408,25 @@ async function callWithRetry(apiFunction, payload, options) {
 async function callClaudeAPI(payload, options) {
   const key = (options.claudeapikey || "").trim();
   if (!key) {
-    throw new Error("Settings error: missing Claude API key. Get one at console.anthropic.com/settings/keys");
+    throw settingsError("Missing Claude API key. Get one at console.anthropic.com/settings/keys");
   }
 
   const model = MODELS[options.model] || MODELS.smart;
 
+  const body = {
+    model: model,
+    max_tokens: MAX_TOKENS,
+    system: payload.system,
+    messages: [{ role: "user", content: payload.text }]
+  };
+
+  if (THINKS_BY_DEFAULT.has(model)) {
+    body.thinking = { type: "disabled" };
+  }
+
   const { data } = await axios.post(
     "https://api.anthropic.com/v1/messages",
-    {
-      model: model,
-      max_tokens: MAX_TOKENS,
-      system: payload.system,
-      messages: [{ role: "user", content: payload.text }]
-    },
+    body,
     {
       timeout: REQUEST_TIMEOUT,
       headers: {
@@ -411,23 +491,26 @@ async function runAction(promptKey, input, options, params) {
     // replace good text with a sentence that stops mid-word. Put the partial
     // on the clipboard so the spend isn't wasted, then report why.
     if (result.truncated) {
-      popclip.copyText(result.text);
+      // Awaited before throwing: the message below promises the partial is on
+      // the clipboard, and throwing on the same tick would race the copy.
+      await popclip.copyText(result.text);
       throw new Error("Response was cut off because it got too long. The partial result was copied to your clipboard. Try a smaller selection.");
     }
 
-    prepareResponse(result.text);
+    await prepareResponse(result.text);
   } catch (error) {
     // Re-throw settings errors to trigger PopClip settings UI
-    if (error.message && error.message.toLowerCase().startsWith("settings error")) {
+    if (isSettingsError(error)) {
       throw error;
     }
 
-    // Show failure indicator
-    popclip.showFailure();
+    // print() is PopClip's logging global; console.log exists but produces no
+    // output. Logs the underlying failure rather than the sanitized message,
+    // which the user has already seen in the bar.
+    print("Claudepleaser error: " + debugDetail(error));
 
-    // Log detailed error for debugging
-    console.log("Claudify Error:", getErrorMessage(error));
-
+    // Throwing is what renders the failure indicator — an explicit
+    // showFailure() here would be a second signal for the same failure.
     throw new Error(getErrorMessage(error));
   }
 }
@@ -475,7 +558,7 @@ const TRANSLATE_SUBMENU = TRANSLATE_LANGS
       code: (input, options) => {
         const language = (options.translateother || "").trim();
         if (!language) {
-          throw new Error("Settings error: enter a language in the \"Other language\" field first.");
+          throw settingsError("Enter a language in the \"Other language\" field first.");
         }
         return runAction("translate", input, options, { language: language });
       }
@@ -488,7 +571,7 @@ const TRANSLATE_SUBMENU = TRANSLATE_LANGS
 // opens the submenu directly rather than running anything.
 exports.actions = [
   {
-    title: "Claudify",
+    title: "Claudepleaser",
     icon: CLAUDE_ICON,
     requirements: ["text"],
     submenu: [
