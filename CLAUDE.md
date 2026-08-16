@@ -5,7 +5,7 @@
 | Property | Value |
 |----------|-------|
 | **GitHub** | `srworksllc/popclip-claudepleaser` |
-| **Local Path** | `/Users/stephenreinhardt/Sites/popclip-claudepleaser` |
+| **Local Path** | `/Users/stephenreinhardt/Sites/srworks/popclip-claudepleaser` |
 | **Type** | PopClip extension (macOS) |
 | **Extension** | `Claudepleaser.popclipext` |
 
