@@ -24,7 +24,14 @@ const MAX_RETRIES = 2;
 const RETRY_DELAY_MS = 500;
 
 // Hard ceiling on total time spent across all attempts, including backoff.
+// Enforced by shrinking each attempt's own timeout to whatever is left of it,
+// not just by gating the sleeps: gating alone let two full-length attempts run
+// ~120s past a ceiling that claims to be 90.
 const TOTAL_DEADLINE_MS = 90000;
+
+// Don't open a request that has less than this left in the budget. It cannot
+// finish, and failing immediately beats making the user wait out a doomed one.
+const MIN_ATTEMPT_MS = 2000;
 
 // Upper bound on selection size. Low enough that an accidental Select All
 // can't run up a surprise bill on the user's own API key.
@@ -381,8 +388,26 @@ function isSettingsError(error) {
 // 500ms is guaranteed to fail again and wastes one of only two attempts.
 function retryAfterMs(error) {
   const headers = error && error.response && error.response.headers;
-  const seconds = headers ? Number(headers["retry-after"]) : NaN;
-  return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : null;
+  const value = headers ? headers["retry-after"] : null;
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+
+  // Delta-seconds is what Anthropic sends today.
+  const seconds = Number(value);
+  if (Number.isFinite(seconds)) {
+    return seconds > 0 ? seconds * 1000 : null;
+  }
+
+  // RFC 9110 also permits an HTTP-date. Without this branch a dated header
+  // parses as NaN and we fall back to a 500ms backoff against a rate limit,
+  // which fails again and burns the attempt this function exists to save.
+  const when = Date.parse(value);
+  if (Number.isNaN(when)) {
+    return null;
+  }
+  const ms = when - Date.now();
+  return ms > 0 ? ms : null;
 }
 
 // Get user-friendly error message
@@ -401,19 +426,26 @@ function getErrorMessage(error) {
   return (error && error.message) || "An unexpected error occurred.";
 }
 
-// Raw failure detail for the Console log: the API's own error body when there
-// is one, else the thrown message. Distinct from getErrorMessage, which is the
-// sanitized string shown in the PopClip bar — logging that one told us nothing
-// the user couldn't already see.
+// Failure detail for the Console log. Distinct from getErrorMessage, which is
+// the sanitized string shown in the PopClip bar — logging that one told us
+// nothing the user couldn't already see.
+//
+// Deliberately NOT the whole response body. On a 400 the body can quote the
+// offending request, and the request body is whatever the user had selected,
+// so stringifying it writes private text into a log nobody opted into. The
+// type and message carry the diagnosis without the payload.
 function debugDetail(error) {
-  const data = error && error.response && error.response.data;
-  if (data) {
-    try {
-      return JSON.stringify(data);
-    } catch (ignored) {
-      // Non-serializable body; fall through to the message.
-    }
+  if (error && error.debugDetail) {
+    return error.debugDetail;
   }
+
+  const data = error && error.response && error.response.data;
+  const apiError = data && data.error;
+  if (apiError) {
+    const type = apiError.type || "api_error";
+    return apiError.message ? type + ": " + apiError.message : type;
+  }
+
   return (error && error.message) || String(error);
 }
 
@@ -425,7 +457,7 @@ async function callWithRetry(apiFunction, payload, options) {
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
-      return await apiFunction(payload, options);
+      return await apiFunction(payload, options, deadline);
     } catch (error) {
       // Don't retry settings errors
       if (isSettingsError(error)) {
@@ -450,7 +482,7 @@ async function callWithRetry(apiFunction, payload, options) {
 }
 
 // --- CLAUDE API
-async function callClaudeAPI(payload, options) {
+async function callClaudeAPI(payload, options, deadline) {
   const key = (options.claudeapikey || "").trim();
   if (!key) {
     throw settingsError("Missing Claude API key. Get one at console.anthropic.com/settings/keys");
@@ -469,11 +501,18 @@ async function callClaudeAPI(payload, options) {
     body.thinking = { type: "disabled" };
   }
 
+  // Spend at most what is left of the overall deadline on this attempt.
+  const remaining = Number.isFinite(deadline) ? deadline - Date.now() : REQUEST_TIMEOUT;
+  if (remaining < MIN_ATTEMPT_MS) {
+    throw new Error("Request timed out. Please try again.");
+  }
+  const timeout = Math.min(REQUEST_TIMEOUT, remaining);
+
   const { data } = await axios.post(
     "https://api.anthropic.com/v1/messages",
     body,
     {
-      timeout: REQUEST_TIMEOUT,
+      timeout: timeout,
       headers: {
         "x-api-key": key,
         "anthropic-version": "2023-06-01",
@@ -498,6 +537,15 @@ async function callClaudeAPI(payload, options) {
     .trim();
 
   if (!text) {
+    // A refusal is HTTP 200 with no text block, so it lands here looking like
+    // an empty response. Say so in the bar, and put the category in the log:
+    // otherwise the two are indistinguishable after the fact.
+    if (data.stop_reason === "refusal") {
+      const details = data.stop_details;
+      const error = new Error("Claude declined to process this text. Try a different selection.");
+      error.debugDetail = "refusal (" + ((details && details.category) || "unspecified") + ")";
+      throw error;
+    }
     throw new Error("Claude returned an empty response. Try rephrasing or selecting different text.");
   }
 
@@ -601,7 +649,13 @@ const TRANSLATE_SUBMENU = TRANSLATE_LANGS
       icon: "symbol:globe",
       requirements: ["text", "option-lang-other=1"],
       code: (input, options) => {
-        const language = (options.translateother || "").trim();
+        // Collapsed and capped: this value is interpolated straight into the
+        // system prompt, so a multi-line entry could carry instructions of its
+        // own. Only the user can set it, but a real language name is short.
+        const language = (options.translateother || "")
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 40);
         if (!language) {
           throw settingsError("Enter a language in the \"Other language\" field first.");
         }
