@@ -288,18 +288,27 @@ const TRANSLATE_LANGS = [
 // mechanical cleanup of the source (rule 2) with hard guards against rewriting
 // or restyling it (rules 3-5), so lazy input becomes clean, natural, still-you
 // output in the target language.
+//
+// Rule 2 and rule 9 are borrowed from correctSpellingGrammar, whose cleanup
+// step this is. Two things were deliberately left behind. Its punctuation rule
+// ("em dashes and semicolons are not errors, leave them alone") is about
+// preserving the user's own marks, and nothing here survives into the output
+// anyway, so rule 4 sends punctuation the other way: follow the target
+// language's conventions, not the source's. And its worked example is not
+// portable, since the target language is only known at call time.
 function translateSystem(language) {
   return `You translate the user's text into ${language}. This is a translation, not a rewrite.
 
 RULES:
 1. Output ONLY the translation. No preamble, no commentary, no quotes, and do not include the original text.
-2. First, silently clean up the source: fix obvious typos, spelling, capitalization, and punctuation, and read any shorthand (u, tmrw, thx) as its intended words. This is a light touch to remove accidental errors only.
+2. First, silently correct the source, then translate the corrected version. Fix spelling, grammar, punctuation, and capitalization errors, and read any shorthand (u, tmrw, thx) as its intended words. Capitalization means the first word of each sentence, proper nouns, and "I"; the input may be entirely lowercase. Correct errors only. Nothing here is a license to polish.
 3. Do NOT rephrase, restructure, formalize, or change the meaning, tone, voice, or level of slang. Keep it as something the user would actually say.
-4. Then translate into natural, native-sounding ${language}. Match the source's register: casual stays casual, formal stays formal, using the language's informal and formal "you" forms where it distinguishes them.
+4. Then translate into natural, native-sounding ${language}. Match the source's register: casual stays casual, formal stays formal, using the language's informal and formal "you" forms where it distinguishes them. Punctuate the output the way ${language} punctuates, not the way the source did.
 5. Render slang and idioms as the natural equivalent a native speaker would use, never word-for-word. If there is no clean equivalent, use the closest real expression.
 6. Keep every name, number, date, and link. Leave proper nouns, @handles, URLs, code, and emojis exactly as written.
 7. Preserve paragraph breaks, greetings, and sign-offs.
 8. If the text is already in ${language}, return it with only the rule 2 cleanup applied. Do not re-translate it, do not route it through another language, and do not reword it.
+9. If the selection is a fragment rather than a complete sentence, translate it as a fragment. Rule 2's capitalization fix does not apply: do not add a capital letter or terminal punctuation the fragment did not already have.
 
 ${INSTRUCTION_GUARD}`;
 }

@@ -46,7 +46,7 @@ popclip-claudepleaser/
 | Make Longer | `makeLonger` | `symbol:plus.circle` | Expand with detail, roughly double length |
 | Make Shorter | `makeShorter` | `symbol:minus.circle` | Condense to essentials, roughly half length |
 | Summarize | `summarize` | `symbol:list.bullet` | Extract key points, 20-30% of original |
-| Translate | `translate` | `symbol:globe` (parent); per-language code badge (children) | Translate into a chosen language, normalize-then-translate |
+| Translate | `translate` | `symbol:globe` (parent); per-language code badge (children) | Translate into a chosen language, normalize-then-translate (cleanup step borrowed from Spelling & Grammar) |
 
 > **All icons are SF Symbols (`symbol:…`), text badges, or one inline `svg:` — never `iconify:`.** The parent "Claudepleaser" entry uses the Claude mark as an inline `svg:` (`CLAUDE_ICON` in settings.js, mirrored into Config.json's `icon` field), because SF Symbols has no Claude glyph; everything below it is SF Symbols. SF Symbols are the best-practice choice for a macOS-native extension: native look, zero maintenance, and instant local rendering. Iconify icons are **fetched from the Iconify web API at render time**, which caused multi-second hover lag (icons not highlighting until fetched, though clicks still worked) — do not reintroduce them. If a specific non-SF shape is ever required, embed it as an inline `svg:` icon (local, also instant) rather than `iconify:`.
 
@@ -201,6 +201,17 @@ The same guard now exists in Improve Writing (rule 4) and Summarize (rule 5), wh
 ### Spelling & Grammar is deliberately different
 
 It carries **no** punctuation-style rule, and explicitly instructs that em dashes and semicolons are not errors. The style rule exists to stop Claude writing em dashes in prose *it* generates; Spelling & Grammar doesn't generate prose, it preserves the user's. Applying the rule there made the prompt self-contradictory ("no semicolons" vs "fix only errors" vs "return unchanged if no errors") and produced a grammar checker that silently restyled correct punctuation. Its example deliberately keeps an em dash and a semicolon while fixing surrounding typos.
+
+### Translate's cleanup step is borrowed from Spelling & Grammar
+
+Translate is normalize-then-translate: rule 2 corrects the source, rules 3-5 forbid rewriting it, then rule 4 translates. Rule 2 and rule 9 are lifted from `correctSpellingGrammar` on purpose, so the two prompts fix the same class of thing the same way. If you change what counts as an "error" in one, look at the other.
+
+Two things were deliberately **not** borrowed:
+
+- **The punctuation rule.** Spelling & Grammar leaves em dashes and semicolons alone because it is preserving the user's own marks. Translate keeps none of the source's punctuation anyway, so rule 4 sends it the opposite way: punctuate the way the target language punctuates. Do not import "em dashes are not errors" here; it would pin Spanish output to English conventions.
+- **The worked example.** Every other prompt carries one (see Prompt structure). Translate cannot, because the target language is only known at call time. It is the one documented exception, not an oversight to fix.
+
+Rule 9 closes a real gap: translate was the only prompt with no fragment rule, which broke shared convention 7. Without it, rule 2's "capitalize the first word of each sentence" turns `thx for the update` into a capitalized, period-terminated sentence in the target language.
 
 ### Tone injection
 
