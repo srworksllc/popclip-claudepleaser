@@ -13,7 +13,7 @@
 
 Claudepleaser is a PopClip extension for macOS that enhances selected text using Claude. It is Anthropic-only: one API key, one endpoint. The dropdown selects a speed/quality tradeoff (`smart` or `fast`), and the actual model ID is resolved from `MODELS` in `settings.js`.
 
-**Author:** Steve Reinhardt | SR Works LLC | https://srworks.co
+**Author:** Steve Reinhardt | SR WORKS LLC | https://srworks.co
 **License:** MIT
 **PopClip Version:** 5992+ (PopClip 2026.7 or later)
 

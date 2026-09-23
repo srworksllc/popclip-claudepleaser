@@ -1,7 +1,7 @@
 /**
  * Claudepleaser - PopClip Extension
  *
- * Copyright (c) 2025 Steve Reinhardt, SR Works LLC
+ * Copyright (c) 2025 Steve Reinhardt, SR WORKS LLC
  * Licensed under the MIT License
  *
  * https://srworks.co

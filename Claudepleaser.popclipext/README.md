@@ -2,7 +2,7 @@
 
 A PopClip extension that enhances your selected text using Claude. Select text, click an action, and get instant results.
 
-**Created by Steve Reinhardt | [SRWorks LLC](https://srworks.co)**
+**Created by Steve Reinhardt | [SR WORKS LLC](https://srworks.co)**
 
 ## Features
 
@@ -106,4 +106,4 @@ View logs in **Console.app** with filter: `Process:PopClip Category:Extension`
 
 ## License
 
-MIT License - Copyright (c) 2026 Steve Reinhardt, SRWorks LLC
+MIT License - Copyright (c) 2026 Steve Reinhardt, SR WORKS LLC
