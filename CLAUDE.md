@@ -416,3 +416,13 @@ Also global without `require()`: `XMLHttpRequest`, `Blob`, `URL`, `URLSearchPara
 ---
 
 PopClip Documentation: https://www.popclip.app/dev/
+
+## Keeping docs true
+
+The workspace rule, "Keeping docs true", applies in full: all six steps, before
+every commit. Anything else this file says about docs adds to it and never
+replaces it. Here:
+
+- **No doc check.** `release.sh` rewrites the Model ID column here and in both READMEs from `Claudepleaser.popclipext/settings.js`; the labels beside it are kept by hand.
+- **Docs also include** `README.md` and `Claudepleaser.popclipext/README.md`.
+- **Open items** go in "Future Improvements".
