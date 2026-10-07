@@ -45,10 +45,10 @@ Powered by Claude. Pick the tradeoff you want in settings.
 
 | Choice | Dropdown Key | Model ID | Last Verified |
 |--------|--------------|----------|---------------|
-| Smarter | `smart` | `claude-sonnet-5` | Aug 2026 |
-| Faster | `fast` | `claude-haiku-4-5` | Aug 2026 |
+| Smarter | `smart` | `claude-sonnet-5-5` | Oct 2026 |
+| Faster | `fast` | `claude-haiku-4-5` | Oct 2026 |
 
-**Smarter** (default) is the better writer — use it for rewriting, expanding, and summarizing. **Faster** returns in about half the time and costs roughly a third as much, which suits quick spelling and grammar passes.
+**Smarter** (default) is the better writer — use it for rewriting, expanding, and summarizing. **Faster** returns in about half the time and costs about half as much, which suits quick spelling and grammar passes.
 
 ## Requirements
 

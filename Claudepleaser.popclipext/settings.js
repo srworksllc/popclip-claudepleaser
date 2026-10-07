@@ -44,7 +44,7 @@ const MAX_INPUT_CHARS = 50000;
 //
 // This is deliberately well under what MAX_TOKENS can hold. The old 1:1 sizing
 // (16,000 chars against a 4,096-token ceiling) assumed ~3.9 chars/token, which
-// is an English-prose figure for an older tokenizer. Sonnet 5 tokenizes to
+// is an English-prose figure for an older tokenizer. Sonnet 5 and 5.5 tokenize to
 // roughly 30% more tokens for the same text, and CJK translation targets are
 // far denser still, so that sizing truncated in practice rather than in theory.
 const OUTPUT_CHAR_BUDGET = 16000;
@@ -72,21 +72,24 @@ function maxInputCharsFor(promptKey) {
 const INPUT_TAG = "input_text";
 
 // Dropdown key → Claude model ID. Update here when Anthropic ships a new model.
-// Last verified: Aug 2026
+// Last verified: Oct 2026
 const MODELS = {
   fast: "claude-haiku-4-5",
-  smart: "claude-sonnet-5"
+  smart: "claude-sonnet-5-5"
 };
 
-// Models that run adaptive thinking when the `thinking` field is unset. For
-// those we disable it explicitly: every action here is a direct transformation
-// rather than a reasoning problem, and thinking tokens come out of the same
-// MAX_TOKENS budget the answer needs. Older models don't think unless asked, so
-// the field is simply omitted for them rather than sent as "disabled" — no need
-// to depend on whether they'd accept it.
-const THINKS_BY_DEFAULT = new Set(["claude-sonnet-5"]);
+// The `thinking` value that turns thinking off, for models that think when the
+// field is unset. Every action here is a direct transformation rather than a
+// reasoning problem, and thinking tokens come out of the same MAX_TOKENS budget
+// the answer needs. The value differs per model: Sonnet 5.5 rejects "disabled"
+// with a 400 and takes "between_tools" instead (no thinking before the answer;
+// this request has no tools). Older models don't think unless asked, so they
+// have no entry and the field is omitted for them.
+const THINKING_OFF = {
+  "claude-sonnet-5-5": { type: "between_tools" }
+};
 
-// Hard ceiling on generated output. On Sonnet 5 this caps thinking *and*
+// Hard ceiling on generated output. On Sonnet 5.5 this caps thinking *and*
 // response text together, which is why thinking is disabled explicitly in
 // callClaudeAPI: these actions are direct transformations, not reasoning
 // problems, so every thinking token would come straight out of the budget the
@@ -173,11 +176,11 @@ RULES:
 1. Output ONLY the corrected text. No preamble, no commentary. Do not wrap the output in quotes.
 2. Fix errors only. Do not rephrase, reword, restructure, or adjust style.
 3. Leave correct punctuation alone, including em dashes, en dashes, and semicolons. These are not errors, and changing them is rewriting.
-4. Fix capitalization: the first word of each sentence, proper nouns, and "I". Input may be entirely lowercase.
+4. Fix capitalization: the first word of each sentence, proper nouns, and "I". Input may be entirely lowercase, with no apostrophes, like a quick text or note. That is not a style to keep: capitalize every sentence and every "I", and add missing apostrophes (dont, thats, im). Correct the whole text in one pass.
 5. Preserve paragraph breaks, line structure, and formatting.
 6. Do not modify code, URLs, file paths, variable names, or technical terms.
 7. If the text contains no errors, return it unchanged.
-8. If the selection is a fragment rather than a complete sentence, correct it as a fragment. Rule 4 does not apply: do not add a capital letter or terminal punctuation the fragment did not already have.
+8. If the whole selection is a single fragment, such as a phrase or a heading, correct it as a fragment: do not add a capital letter or terminal punctuation it did not already have. Text with several sentences is not a fragment, even if its sentences lack capitals or periods.
 
 ${INSTRUCTION_GUARD}
 
@@ -308,7 +311,7 @@ RULES:
 6. Keep every name, number, date, and link. Leave proper nouns, @handles, URLs, code, and emojis exactly as written.
 7. Preserve paragraph breaks, greetings, and sign-offs.
 8. If the text is already in ${language}, return it with only the rule 2 cleanup applied. Do not re-translate it, do not route it through another language, and do not reword it.
-9. If the selection is a fragment rather than a complete sentence, translate it as a fragment. Rule 2's capitalization fix does not apply: do not add a capital letter or terminal punctuation the fragment did not already have.
+9. If the whole selection is a single fragment, such as a phrase or a heading, translate it as a fragment: do not add a capital letter or terminal punctuation it did not already have. Text with several sentences is not a fragment, even if its sentences lack capitals or periods.
 
 ${INSTRUCTION_GUARD}`;
 }
@@ -506,8 +509,8 @@ async function callClaudeAPI(payload, options, deadline) {
     messages: [{ role: "user", content: payload.text }]
   };
 
-  if (THINKS_BY_DEFAULT.has(model)) {
-    body.thinking = { type: "disabled" };
+  if (THINKING_OFF[model]) {
+    body.thinking = THINKING_OFF[model];
   }
 
   // Spend at most what is left of the overall deadline on this attempt.

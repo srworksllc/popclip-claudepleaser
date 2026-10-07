@@ -62,19 +62,21 @@ The dropdown stores intent keys (`smart`, `fast`), not model IDs. The actual ID 
 
 | Choice | Dropdown Key | Model ID | Last Verified |
 |--------|--------------|----------|---------------|
-| Smarter | `smart` | `claude-sonnet-5` | Aug 2026 |
-| Faster | `fast` | `claude-haiku-4-5` | Aug 2026 |
+| Smarter | `smart` | `claude-sonnet-5-5` | Oct 2026 |
+| Faster | `fast` | `claude-haiku-4-5` | Oct 2026 |
 
 `smart` is the default. Unknown or missing keys fall back to `MODELS.smart`, so a stale stored preference degrades to a working model rather than an API error.
 
+> **Model IDs are pinned, never "latest".** The API has no alias that follows the newest Sonnet or Haiku; each version has its own ID. Picking the newest at runtime from the Models API was considered and rejected: new versions change the request surface, and an automatic switch would have broken every action with no warning. Sonnet 5.5 is the proof: it answers `thinking: {type: "disabled"}`, which Sonnet 5 accepted, with a 400. Upgrade by editing `MODELS` (and `THINKING_OFF`), running a typo-heavy multi-paragraph sample through Spelling & Grammar on both models, then `./release.sh`.
+
 `MAX_TOKENS` is `16000`, the documented ceiling for a **non-streaming** request; anything higher requires streaming to avoid an HTTP timeout. It was `2048` under Groq's free-tier TPM budget, then `4096` after Groq was dropped.
 
-`4096` turned out to be too tight once `smart` moved to Sonnet 5, for two compounding reasons:
+`4096` turned out to be too tight once `smart` moved to Sonnet 5 (now Sonnet 5.5, same on both counts), for two compounding reasons:
 
-1. **Sonnet 5 thinks by default.** Omitting the `thinking` field runs adaptive thinking, and `max_tokens` caps thinking *plus* response text together — so part of the budget was being spent before the answer started. `THINKS_BY_DEFAULT` now disables it explicitly for models that need it. These actions are direct transformations, not reasoning problems, so there is nothing to gain from thinking and a real budget cost to leaving it on.
-2. **Sonnet 5 uses a denser tokenizer** — roughly 30% more tokens for the same text than the previous generation. The old sizing assumed ~3.9 chars/token, an English-prose figure that no longer holds, and holds far worse for CJK translation targets.
+1. **Sonnet thinks by default.** Omitting the `thinking` field runs adaptive thinking, and `max_tokens` caps thinking *plus* response text together — so part of the budget was being spent before the answer started. `THINKING_OFF` now turns it off explicitly for models that need it. These actions are direct transformations, not reasoning problems, so there is nothing to gain from thinking and a real budget cost to leaving it on.
+2. **Sonnet 5 and 5.5 use a denser tokenizer** — roughly 30% more tokens for the same text than the previous generation. The old sizing assumed ~3.9 chars/token, an English-prose figure that no longer holds, and holds far worse for CJK translation targets.
 
-> **`thinking` is sent per-model, not globally.** Older models (Haiku 4.5) don't think unless asked, so the field is omitted for them rather than sent as `disabled` — that avoids depending on whether they'd accept the value at all. Adding a model that thinks by default means adding it to `THINKS_BY_DEFAULT`.
+> **`thinking` is sent per-model, not globally.** `THINKING_OFF` maps each model that thinks by default to the value that turns thinking off, because that value differs by model: Sonnet 5 took `{type: "disabled"}`, Sonnet 5.5 rejects it with a 400 and takes `{type: "between_tools"}` (no thinking before the answer; these requests carry no tools). Older models (Haiku 4.5) don't think unless asked, so they have no entry and the field is omitted. Adding a model that thinks by default means adding its entry to `THINKING_OFF`.
 
 
 ## Code Architecture
@@ -82,7 +84,7 @@ The dropdown stores intent keys (`smart`, `fast`), not model IDs. The actual ID 
 ### settings.js Structure
 
 - Header and imports (`axios`)
-- Configuration constants: `REQUEST_TIMEOUT` (60s), `MAX_RETRIES` (2), `RETRY_DELAY_MS` (500), `MODELS` (intent key→model ID map), `THINKS_BY_DEFAULT` (models needing `thinking: disabled`), `MAX_TOKENS` (16000)
+- Configuration constants: `REQUEST_TIMEOUT` (60s), `MAX_RETRIES` (2), `RETRY_DELAY_MS` (500), `MODELS` (intent key→model ID map), `THINKING_OFF` (model→the `thinking` value that turns thinking off), `MAX_TOKENS` (16000)
 - `TONES` map and `TONE_ACTIONS` list — tone instructions injected into writing prompts when not "default"
 - `PROMPTS` object — 5 prompt templates (improveWriting, correctSpellingGrammar, summarize, makeLonger, makeShorter)
 - Translate helpers: `TRANSLATE_LANGS` (curated `{name, code}` list driving the static submenu), `translateSystem(language)` (builds the normalize-then-translate prompt for a target language)
@@ -202,6 +204,8 @@ The same guard now exists in Improve Writing (rule 4) and Summarize (rule 5), wh
 
 It carries **no** punctuation-style rule, and explicitly instructs that em dashes and semicolons are not errors. The style rule exists to stop Claude writing em dashes in prose *it* generates; Spelling & Grammar doesn't generate prose, it preserves the user's. Applying the rule there made the prompt self-contradictory ("no semicolons" vs "fix only errors" vs "return unchanged if no errors") and produced a grammar checker that silently restyled correct punctuation. Its example deliberately keeps an em dash and a semicolon while fixing surrounding typos.
 
+**Casual writing is not a style to preserve.** "Fix errors only, do not adjust style" plus the fragment rule let Sonnet 5 read all-lowercase, apostrophe-free text (a quick note or text message) as the user's deliberate style. On a long note it fixed every misspelling but left ~19 lowercase sentence starts, every lowercase "i", and `thats`/`doesnt`; running it a second time fixed them, because half-corrected text no longer looked deliberate. Rule 4 now says outright that lowercase sentences, a lowercase "i" and missing apostrophes are errors, to be fixed in one pass, and rule 8 applies only when the *whole* selection is a single fragment (a phrase or heading), never to multi-sentence text that lacks capitals or periods. Tested 2026-10-07: zero misses on the first pass on Sonnet 5, Sonnet 5.5 and Haiku 4.5. Don't loosen either rule without re-running that kind of sample.
+
 ### Translate's cleanup step is borrowed from Spelling & Grammar
 
 Translate is normalize-then-translate: rule 2 corrects the source, rules 3-5 forbid rewriting it, then rule 4 translates. Rule 2 and rule 9 are lifted from `correctSpellingGrammar` on purpose, so the two prompts fix the same class of thing the same way. If you change what counts as an "error" in one, look at the other.
@@ -211,7 +215,7 @@ Two things were deliberately **not** borrowed:
 - **The punctuation rule.** Spelling & Grammar leaves em dashes and semicolons alone because it is preserving the user's own marks. Translate keeps none of the source's punctuation anyway, so rule 4 sends it the opposite way: punctuate the way the target language punctuates. Do not import "em dashes are not errors" here; it would pin Spanish output to English conventions.
 - **The worked example.** Every other prompt carries one (see Prompt structure). Translate cannot, because the target language is only known at call time. It is the one documented exception, not an oversight to fix.
 
-Rule 9 closes a real gap: translate was the only prompt with no fragment rule, which broke shared convention 7. Without it, rule 2's "capitalize the first word of each sentence" turns `thx for the update` into a capitalized, period-terminated sentence in the target language.
+Rule 9 carries the same narrowed wording as Spelling & Grammar's rule 8 (only a selection that is wholly one fragment). It closed a real gap: translate was the only prompt with no fragment rule, which broke shared convention 7. Without it, rule 2's "capitalize the first word of each sentence" turns `thx for the update` into a capitalized, period-terminated sentence in the target language.
 
 ### Tone injection
 
