@@ -44,7 +44,7 @@ const MAX_INPUT_CHARS = 50000;
 //
 // This is deliberately well under what MAX_TOKENS can hold. The old 1:1 sizing
 // (16,000 chars against a 4,096-token ceiling) assumed ~3.9 chars/token, which
-// is an English-prose figure for an older tokenizer. Sonnet 5 and 5.5 tokenize to
+// is an English-prose figure for an older tokenizer. Sonnet 5/5.5 and Haiku 5.5 tokenize to
 // roughly 30% more tokens for the same text, and CJK translation targets are
 // far denser still, so that sizing truncated in practice rather than in theory.
 const OUTPUT_CHAR_BUDGET = 16000;
@@ -74,7 +74,7 @@ const INPUT_TAG = "input_text";
 // Dropdown key → Claude model ID. Update here when Anthropic ships a new model.
 // Last verified: Oct 2026
 const MODELS = {
-  fast: "claude-haiku-4-5",
+  fast: "claude-haiku-5-5",
   smart: "claude-sonnet-5-5"
 };
 
@@ -83,13 +83,15 @@ const MODELS = {
 // reasoning problem, and thinking tokens come out of the same MAX_TOKENS budget
 // the answer needs. The value differs per model: Sonnet 5.5 rejects "disabled"
 // with a 400 and takes "between_tools" instead (no thinking before the answer;
-// this request has no tools). Older models don't think unless asked, so they
-// have no entry and the field is omitted for them.
+// this request has no tools), while Haiku 5.5 takes "disabled" (accepted at its
+// default effort, medium) and rejects "between_tools". A model that doesn't
+// think unless asked needs no entry, and the field is omitted for it.
 const THINKING_OFF = {
+  "claude-haiku-5-5": { type: "disabled" },
   "claude-sonnet-5-5": { type: "between_tools" }
 };
 
-// Hard ceiling on generated output. On Sonnet 5.5 this caps thinking *and*
+// Hard ceiling on generated output. On Sonnet 5.5 and Haiku 5.5 this caps thinking *and*
 // response text together, which is why thinking is disabled explicitly in
 // callClaudeAPI: these actions are direct transformations, not reasoning
 // problems, so every thinking token would come straight out of the budget the
